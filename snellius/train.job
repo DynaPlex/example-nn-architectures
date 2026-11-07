@@ -1,0 +1,37 @@
+#!/bin/bash
+#SBATCH --job-name=dvrp
+#SBATCH --partition=genoa
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=192
+#SBATCH --time=00:20:00
+#SBATCH --output=results/dvrp-%j.out
+
+# Run a training script on a compute node. Submit FROM THE REPO ROOT (job output
+# goes to results/, created by snellius/setup.sh).
+#
+# Everything after the job script is train.py's command line:
+#
+#     sbatch snellius/train.job dcl --net attention --n 2000 --m 500 --h 100
+#
+# ...unless the first argument names a .py file, in which case THAT script runs
+# and the rest are its arguments. This is how the standalone run scripts reach
+# the cluster (they carry their own budgets, so they take no --n/--m/--h):
+#
+#     sbatch --time=24:00:00 snellius/train.job run_sat.py --paper
+#     sbatch --time=24:00:00 snellius/train.job run_benchmark.py --budget long --seeds 8
+#
+# The default asks for a full Genoa node (192 cores, billed 192 SBU/hour);
+# DCL's machine plan "auto" recognizes that allocation and sizes the collection
+# to it (32 processes x 5 workers). Longer runs override the walltime:
+#     sbatch --time=24:00:00 snellius/train.job ...
+cd "$SLURM_SUBMIT_DIR"
+source .venv/bin/activate
+echo "node: $(hostname)  cores: $SLURM_CPUS_PER_TASK  args: $*"
+lscpu | grep "Model name"
+case "$1" in
+    *.py) script="$1"; shift ;;
+    *)    script="train.py" ;;
+esac
+echo "script: $script"
+python "$script" "$@"
+echo done
