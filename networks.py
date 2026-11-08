@@ -1,31 +1,19 @@
-"""Dot-attention network factory (WvJ design 2026-08-14), consumed by DCL via
-`Net("networks.attention_net", ...)` — dotted path from the repo root.
+"""The networks, one factory per architecture, consumed by DCL/PPO via
+`Net("networks.<factory>", **kwargs)` — a dotted path plus JSON kwargs, so an
+agent artifact can rebuild its network on any machine.
 
-Token bundle in (see featurizers_tokens.TokenFeaturizer): `orders`
-[B, max_n, 2] + `orders_count` [B], `vehicles` [B, V, 4] (feature 3 = is-focal
-flag), `depot` [B, 1, 2]. Each token type gets its OWN small embedding MLP to d_model, the
-stack attends over [depot | vehicles | orders] with padded orders masked via
-`orders_count` (mask = arange(max_n) >= count), and the head reads the FOCAL
-vehicle's output vector.
+Every factory is `factory(spec, num_actions, **kwargs) -> nn.Module`, where
+`spec` is the featurizer's observation spec (dict of TensorSpec, per-sample
+shapes) and the module's forward takes the batch dict keyed like the spec and
+returns [B, num_actions] logits. Both networks here emit CELL action
+logits (one per grid cell, row-major) and never read the validity mask:
+masked cross-entropy in DCL training and masked argmax when acting crop the
+logits downstream, so a network must emit finite values for every action.
 
-Heads (`head=` kwarg) x action encodings (mdp.ActionEncoding, read off
-`num_actions`):
-
-  * head="moves5" — an MLP from the focal vehicle's vector to 5 move logits
-    (stay/up/down/left/right; the DIRECTIONAL action order).
-      - DIRECTIONAL mdp (num_actions == 5): the 5 logits ARE the action
-        logits — returned directly. The natural pairing.
-      - CELL mdp (num_actions == G^2): the 5 logits are SCATTERED into the
-        cell-action space at the focal vehicle's stay/neighbor cells, read
-        off the focal token's (row, col) features. Off-grid moves contribute
-        nothing and every other cell sits at -1e9 (the validity mask would
-        kill them anyway; the -1e9 keeps the net's output well-defined
-        without it). This adapter exists so the head can train on
-        cell-encoded labels (e.g. pre-existing sample sets) — prefer the
-        DIRECTIONAL mdp when collecting fresh.
-  * head="map" — a plain MLP from the focal vector to all num_actions logits
-    (with a CELL mdp: a G^2 desirability map, the closest apples-to-apples
-    against the flat-MLP baseline). Works with either encoding.
+  gin_net                one node per cell on the lattice, GIN message
+                         passing, one logit per node       (featurizer_graph)
+  move_token_net         one token per candidate move plus context tokens,
+                         scores scattered to the cells     (featurizer_moves)
 """
 from __future__ import annotations
 
@@ -39,121 +27,138 @@ def _embed(d_in: int, d_model: int) -> nn.Module:
     return nn.Sequential(nn.Linear(d_in, d_model), nn.ReLU(), nn.Linear(d_model, d_model))
 
 
-class _AttentionNet(nn.Module):
+# ============================================================================
+# GIN on the grid graph (pairs with featurizer_graph.GridGraphFeaturizer)
+# ============================================================================
+
+
+def _lattice_adjacency(g: int) -> torch.Tensor:
+    """[G*G, G*G] 0/1 matrix of the 4-neighbour grid graph, row-major cells."""
+    adj = torch.zeros(g * g, g * g)
+    for r in range(g):
+        for c in range(g):
+            i = r * g + c
+            if r > 0:
+                adj[i, i - g] = 1.0
+            if r < g - 1:
+                adj[i, i + g] = 1.0
+            if c > 0:
+                adj[i, i - 1] = 1.0
+            if c < g - 1:
+                adj[i, i + 1] = 1.0
+    return adj
+
+
+class _GINNet(nn.Module):
+    """Graph Isomorphism Network (Xu et al. 2019) on the grid graph, adapted
+    from the "Node Actions" architecture of Begnardi et al. (2023) to one-step
+    move actions. An input projection, then `n_layers` residual rounds of
+
+        x_i <- x_i + MLP(x_i + sum_{j adjacent to i} M(x_j)),
+
+    where M is a per-layer MLP applied to every neighbour before the sum (the
+    paper sums raw neighbours and weights the node itself by 1 + eps; here the
+    self weight is 1 and M does the shaping). Because M is shared over nodes,
+    it runs once on the whole node matrix and the sum over neighbours is one
+    matmul with the fixed lattice adjacency (a buffer, not a parameter).
+
+    Readout: every node is scored by a shared MLP from three vectors — its own
+    embedding, the mean over all node embeddings (a global summary of the
+    order field), and the embedding of the deciding vehicle's node (node
+    feature 0 marks it) — so a candidate cell is scored as an origin–
+    destination pair in the context of the whole grid. Nodes are written in
+    row-major cell order by the featurizer, so the [B, G^2] logits are the
+    CELL action logits; the validity mask crops them downstream.
+
+    Why not the paper's layer as is: the paper's action is a destination, so
+    three hops of context around the scored node suffice. A one-step move
+    gives five neighbouring candidates with nearly the same few-hop view, and
+    an order six cells away is invisible to all of them — hence six layers,
+    residual connections to train them, and the two readouts (README, Results).
+    """
+
     def __init__(self, spec, num_actions: int, d_model: int, n_layers: int,
-                 n_heads: int, ff: int, head: str, hidden_head: int):
+                 hidden_head: int):
         super().__init__()
-        # num_actions identifies the mdp's action encoding: 5 = DIRECTIONAL
-        # (moves5 logits are the action logits), a square = CELL (moves5
-        # scatters into the grid; map emits the G^2 desirability map).
-        self.directional = num_actions == 5
-        if not self.directional:
-            self.g = math.isqrt(num_actions)
-            assert self.g * self.g == num_actions, \
-                "CELL action space must be a square grid (or 5 for DIRECTIONAL)"
-        self.max_n = spec["orders"].sample_shape[0]
-        self.head_kind = head
-        self.emb_orders = _embed(spec["orders"].sample_shape[1], d_model)
-        self.emb_vehicles = _embed(spec["vehicles"].sample_shape[1], d_model)
-        self.emb_depot = _embed(spec["depot"].sample_shape[1], d_model)
-        layer = nn.TransformerEncoderLayer(
-            d_model, n_heads, dim_feedforward=ff, batch_first=True, norm_first=True)
-        self.encoder = nn.TransformerEncoder(layer, n_layers, enable_nested_tensor=False)
-        out = 5 if head == "moves5" else num_actions
-        self.head = nn.Sequential(nn.Linear(d_model, hidden_head), nn.ReLU(),
-                                  nn.Linear(hidden_head, out))
+        n_nodes, d_in = spec["nodes"].sample_shape
+        assert num_actions == n_nodes, (
+            f"gin_net pairs nodes 1:1 with CELL actions: num_actions={num_actions} "
+            f"but the featurizer declares {n_nodes} nodes")
+        g = math.isqrt(n_nodes)
+        assert g * g == n_nodes, "the node set must be a square grid"
+        self.register_buffer("adj", _lattice_adjacency(g))
+        self.inp = nn.Linear(d_in, d_model)
+
+        def mlp():
+            return nn.Sequential(nn.Linear(d_model, d_model), nn.ReLU(),
+                                 nn.Linear(d_model, d_model))
+
+        self.messages = nn.ModuleList(mlp() for _ in range(n_layers))
+        self.updates = nn.ModuleList(mlp() for _ in range(n_layers))
+        self.head = nn.Sequential(nn.Linear(3 * d_model, hidden_head), nn.ReLU(),
+                                  nn.Linear(hidden_head, 1))
+
+    def embed(self, nodes):
+        """Node embeddings after message passing: [B, N, d]. A node's embedding
+        depends on nodes within `n_layers` lattice hops and on nothing else."""
+        x = torch.relu(self.inp(nodes))                             # [B, N, d]
+        for message, update in zip(self.messages, self.updates):
+            neighbours = torch.matmul(self.adj, message(x))         # [N, N] @ [B, N, d]
+            x = x + torch.relu(update(x + neighbours))
+        return x
 
     def forward(self, batch):
-        orders, counts = batch["orders"], batch["orders_count"]
-        vehicles, depot = batch["vehicles"], batch["depot"]
-        B = orders.shape[0]
-        tokens = torch.cat([self.emb_depot(depot), self.emb_vehicles(vehicles),
-                            self.emb_orders(orders)], dim=1)
-        # key padding: depot + vehicles always real, orders masked past the count
-        n_fixed = 1 + vehicles.shape[1]
-        pad = torch.zeros(B, tokens.shape[1], dtype=torch.bool, device=tokens.device)
-        pad[:, n_fixed:] = (torch.arange(self.max_n, device=tokens.device)[None, :]
-                            >= counts[:, None])
-        h = self.encoder(tokens, src_key_padding_mask=pad)
-        # focal vehicle readout (feature 3 = is-focal flag, exactly one per row)
-        focal_idx = vehicles[:, :, 3].argmax(dim=1)
-        focal = h[torch.arange(B, device=h.device), 1 + focal_idx]
-        logits = self.head(focal)
-        if self.head_kind != "moves5" or self.directional:
-            return logits   # map head, or moves5 on a DIRECTIONAL mdp (direct)
-        # CELL mdp: scatter the 5 move logits into the G^2 cell-action space by
-        # INDEXED ASSIGNMENT — never by adding large sentinels: an earlier
-        # `-1e9 + (logit + 1e9)` construction quantized the logits to float32's
-        # ~64-unit resolution at 1e9 and made training diverge in visible jumps.
-        # Valid moves land on distinct cells, so the writes never collide;
-        # off-grid moves are simply not written and their cells stay at -1e9
-        # (the validity mask kills them anyway).
-        gm1 = float(self.g - 1)
-        row = (vehicles[torch.arange(B), focal_idx, 0] * gm1).round().long()
-        col = (vehicles[torch.arange(B), focal_idx, 1] * gm1).round().long()
-        out = torch.full((B, self.g * self.g), -1e9,
-                         dtype=logits.dtype, device=logits.device)
-        moves = ((0, 0), (-1, 0), (1, 0), (0, -1), (0, 1))   # stay/up/down/left/right
-        rows = torch.arange(B, device=logits.device)
-        for k, (dr, dc) in enumerate(moves):
-            r, c = row + dr, col + dc
-            ok = (r >= 0) & (r < self.g) & (c >= 0) & (c < self.g)
-            cell = r * self.g + c
-            out[rows[ok], cell[ok]] = logits[ok, k]
-        return out
+        nodes = batch["nodes"]
+        x = self.embed(nodes)
+        n = x.shape[1]
+        graph = x.mean(dim=1, keepdim=True).expand(-1, n, -1)
+        focal = nodes[:, :, 0:1]                                    # 1.0 on the deciding vehicle's node
+        origin = (x * focal).sum(dim=1, keepdim=True).expand(-1, n, -1)
+        return self.head(torch.cat([x, graph, origin], dim=-1)).squeeze(-1)  # [B, N]
 
 
-def attention_critic(spec: dict, num_actions: int, *, d_model: int = 64,
-                     n_layers: int = 2, n_heads: int = 4, ff: int = 128,
-                     hidden_head: int = 64) -> nn.Module:
-    """PPO value head over the token bundle: the same attention trunk as
-    `attention_net`, reading the focal vehicle's vector into a scalar value
-    per sample ([B, 1]). Entry point for PPO's `critic_network` —
-    `Net("networks.attention_critic", ...)` — which builds critics as
-    `factory(spec, 1)`; `num_actions` is therefore always 1 here and the
-    "map" head with one output IS the value head. Training machinery only:
-    it lives in PPO's checkpoint, never in the agent artifact."""
-    return _AttentionNet(spec, 1, d_model, n_layers, n_heads, ff,
-                         "map", hidden_head)
+def gin_net(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 6,
+            hidden_head: int = 64) -> nn.Module:
+    """Factory entry point: `Net("networks.gin_net", ...)`. Consumes
+    GridGraphFeaturizer's `nodes` on a CELL-encoded mdp. Six layers are needed
+    on the 10x10 grid (three leave the policy at myopic level); train with
+    lr=1e-3, ten times DynaPlex's default."""
+    return _GINNet(spec, num_actions, d_model, n_layers, hidden_head)
 
 
-def attention_net(spec: dict, num_actions: int, *, d_model: int = 64,
-                  n_layers: int = 2, n_heads: int = 4, ff: int = 128,
-                  head: str = "moves5", hidden_head: int = 64) -> nn.Module:
-    """Factory entry point: `Net("networks.attention_net", d_model=..., ...)`.
+# ============================================================================
+# Candidate-token net (pairs with featurizer_moves.MoveTokenFeaturizer)
+# ============================================================================
 
-    Args:
-        spec: the observation spec (dict of TensorSpec) — must be
-            TokenFeaturizer's bundle (orders/orders_count/vehicles/depot;
-            extra entries are tolerated and ignored).
-        num_actions: the mdp's action count; also selects the encoding
-            (5 = DIRECTIONAL, a square = CELL — see the module docstring).
-        d_model / n_layers / n_heads / ff: transformer size knobs.
-        head: "moves5" (focal vehicle -> 5 move logits; the default) or
-            "map" (focal vehicle -> all num_actions logits).
-        hidden_head: hidden width of the head MLP.
+
+class _MoveTokenNet(nn.Module):
+    """Score the deciding vehicle's candidate moves against the state.
+
+    Tokens: the 5 candidate cells first, then depot, vehicles and the (padded,
+    masked) waiting orders. One transformer encoder over all of them; a shared
+    head scores each candidate token. The 5 scores are scattered into the
+    [B, G^2] CELL action vector at the candidates' own coordinates (off-grid
+    candidates, flag 0, are skipped and their cells stay at -1e9 — the validity
+    mask rejects them anyway).
+
+    `interact=False` forbids candidate tokens from attending to each other
+    (each still attends to itself and to the context), so every candidate is
+    scored independently of which other moves are available; `interact=True`
+    (default) lets the candidates condition on one another — the relational
+    step of AGILE (Jain et al.). The difference is what the switch measures.
     """
-    return _AttentionNet(spec, num_actions, d_model, n_layers, n_heads, ff,
-                         head, hidden_head)
-
-
-class _AttentionPointerNet(nn.Module):
-    """Grid-token pointer net (pairs with GridTokenFeaturizer + CELL encoding):
-    every location is a token; the head scores each cell token with a shared
-    MLP, and because the featurizer writes cell tokens in row-major cell order,
-    the [B, G^2] scores ARE the action logits — the ordinary validity mask
-    crops them downstream (masked CE / masked argmax); the network never
-    handles masking. No padding mask either: all tokens are always real."""
 
     def __init__(self, spec, num_actions: int, d_model: int, n_layers: int,
-                 n_heads: int, ff: int, hidden_head: int):
+                 n_heads: int, ff: int, hidden_head: int, interact: bool):
         super().__init__()
-        n_cells = spec["cells"].sample_shape[0]
-        assert num_actions == n_cells, (
-            f"attention_pointer_net pairs cell tokens 1:1 with CELL actions: "
-            f"num_actions={num_actions} but the featurizer declares {n_cells} "
-            f"cell tokens (is the mdp using ActionEncoding.CELL?)")
-        self.emb_cells = _embed(spec["cells"].sample_shape[1], d_model)
+        self.g = math.isqrt(num_actions)
+        assert self.g * self.g == num_actions, \
+            "move_token_net emits CELL action logits: num_actions must be a square"
+        self.n_cand = spec["candidates"].sample_shape[0]
+        self.max_n = spec["orders"].sample_shape[0]
+        self.interact = interact
+        self.emb_candidates = _embed(spec["candidates"].sample_shape[1], d_model)
+        self.emb_orders = _embed(spec["orders"].sample_shape[1], d_model)
         self.emb_vehicles = _embed(spec["vehicles"].sample_shape[1], d_model)
         self.emb_depot = _embed(spec["depot"].sample_shape[1], d_model)
         layer = nn.TransformerEncoderLayer(
@@ -163,20 +168,45 @@ class _AttentionPointerNet(nn.Module):
                                   nn.Linear(hidden_head, 1))
 
     def forward(self, batch):
-        vehicles, depot, cells = batch["vehicles"], batch["depot"], batch["cells"]
-        n_fixed = depot.shape[1] + vehicles.shape[1]
-        tokens = torch.cat([self.emb_depot(depot), self.emb_vehicles(vehicles),
-                            self.emb_cells(cells)], dim=1)
-        h = self.encoder(tokens)
-        # score each CELL token; token order == row-major cell order == action order
-        return self.head(h[:, n_fixed:]).squeeze(-1)
+        cand, orders, counts = batch["candidates"], batch["orders"], batch["orders_count"]
+        vehicles, depot = batch["vehicles"], batch["depot"]
+        B = cand.shape[0]
+        dev = cand.device
+        tokens = torch.cat([self.emb_candidates(cand), self.emb_depot(depot),
+                            self.emb_vehicles(vehicles), self.emb_orders(orders)], dim=1)
+        T = tokens.shape[1]
+        # key padding: everything real except orders past the count
+        pad = torch.zeros(B, T, dtype=torch.bool, device=dev)
+        pad[:, T - self.max_n:] = (torch.arange(self.max_n, device=dev)[None, :]
+                                   >= counts[:, None])
+        attn_mask = None
+        if not self.interact:
+            # True = may NOT attend. Block candidate -> other candidate.
+            attn_mask = torch.zeros(T, T, dtype=torch.bool, device=dev)
+            attn_mask[:self.n_cand, :self.n_cand] = ~torch.eye(
+                self.n_cand, dtype=torch.bool, device=dev)
+        h = self.encoder(tokens, mask=attn_mask, src_key_padding_mask=pad)
+        scores = self.head(h[:, :self.n_cand]).squeeze(-1)   # [B, 5]
+        # scatter into the cell-action space by indexed assignment (never by
+        # adding large sentinels: that quantizes the logits, see _MoveTokenNet)
+        gm1 = float(self.g - 1)
+        row = (cand[:, :, 0] * gm1).round().long()
+        col = (cand[:, :, 1] * gm1).round().long()
+        cell = row * self.g + col
+        ok = cand[:, :, 3] > 0.5
+        out = torch.full((B, self.g * self.g), -1e9, dtype=scores.dtype, device=dev)
+        rows = torch.arange(B, device=dev)
+        for k in range(self.n_cand):
+            sel = ok[:, k]
+            out[rows[sel], cell[sel, k]] = scores[sel, k]
+        return out
 
 
-def attention_pointer_net(spec: dict, num_actions: int, *, d_model: int = 64,
-                          n_layers: int = 2, n_heads: int = 4, ff: int = 128,
-                          hidden_head: int = 64) -> nn.Module:
-    """Factory entry point: `Net("networks.attention_pointer_net", ...)`.
-    Consumes GridTokenFeaturizer's bundle (cells/vehicles/depot) on a
-    CELL-encoded mdp; see _AttentionPointerNet for the token-order contract."""
-    return _AttentionPointerNet(spec, num_actions, d_model, n_layers, n_heads,
-                                ff, hidden_head)
+def move_token_net(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 2,
+                  n_heads: int = 4, ff: int = 128, hidden_head: int = 64,
+                  interact: bool = True) -> nn.Module:
+    """Factory entry point: `Net("networks.move_token_net", ...)`. Consumes
+    MoveTokenFeaturizer's bundle on a CELL-encoded mdp; `interact` is the
+    candidate-to-candidate attention switch (see _MoveTokenNet)."""
+    return _MoveTokenNet(spec, num_actions, d_model, n_layers, n_heads, ff,
+                         hidden_head, interact)

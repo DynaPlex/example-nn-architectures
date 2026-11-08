@@ -1,16 +1,13 @@
 """Simulate one episode and write a self-contained interactive HTML player.
 
-Usage:
-    python visualize.py                          # myopic policy, defaults
-    python visualize.py --policy random --seed 4 --periods 300 --out ep.html
-    python visualize.py --agent dynaplex_runs/.../agent_gen1 --out agent.html
+Edit the constants below (which policy, seed, periods, output file), then
 
-Then open the resulting HTML file in any browser. No dependencies beyond the
-model itself (torch only with --agent): the trajectory is embedded as JSON in
-the page, rendered as SVG with plain JavaScript (play/pause, step, speed,
-scrubber).
+    .venv/bin/python visualize.py
+
+and open the HTML file in a browser. No dependencies beyond the model itself
+(torch only for a trained agent): the trajectory is embedded as JSON in the
+page, rendered as SVG with plain JavaScript (play/pause, step, speed, scrubber).
 """
-import argparse
 import json
 
 import dynaplex
@@ -18,6 +15,13 @@ from dynaplex.models import RandomPolicy
 from dynaplex.modelling import StateCategory
 
 from mdp import MyopicPolicy, VehicleRoutingMDP
+
+# which policy to watch: "myopic", "random", or the path of a trained agent
+# directory such as "dynaplex_runs/VehicleRoutingMDP_.../exp_.../agent_gen1"
+POLICY = "myopic"
+SEED = 3
+PERIODS = 200
+OUT = "episode.html"
 
 
 class AgentPolicy:
@@ -172,44 +176,26 @@ render();
 
 
 def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--policy", choices=("myopic", "random"), default="myopic")
-    ap.add_argument("--agent", default=None,
-                    help="path to a trained agent dir (overrides --policy; needs torch)")
-    ap.add_argument("--seed", type=int, default=3)
-    ap.add_argument("--periods", type=int, default=200)
-    ap.add_argument("--out", default="episode.html")
-    ap.add_argument("--grid-size", type=int, default=10)
-    ap.add_argument("--vehicles", type=int, default=5)
-    ap.add_argument("--capacity", type=int, default=5)
-    ap.add_argument("--max-orders", type=int, default=30)
-    ap.add_argument("--order-probability", type=float, default=0.5)
-    args = ap.parse_args()
-
-    mdp = VehicleRoutingMDP(grid_size=args.grid_size, n_vehicles=args.vehicles,
-                            capacity=args.capacity, max_orders=args.max_orders,
-                            order_probability=args.order_probability)
-    if args.agent is not None:
-        from dynaplex.nn import NNAgent
-        policy = AgentPolicy(mdp, NNAgent.load(args.agent))
-        name = f"agent [{args.agent}]"
+    mdp = VehicleRoutingMDP()
+    if POLICY == "myopic":
+        policy, name = MyopicPolicy(mdp), "myopic policy"
+    elif POLICY == "random":
+        policy, name = RandomPolicy(mdp), "random policy"
     else:
-        policy = (MyopicPolicy(mdp) if args.policy == "myopic"
-                  else RandomPolicy(mdp))
-        name = f"{args.policy} policy"
-    frames = simulate(mdp, policy, args.seed, args.periods)
+        from dynaplex.nn import NNAgent
+        policy, name = AgentPolicy(mdp, NNAgent.load(POLICY)), f"agent [{POLICY}]"
+    frames = simulate(mdp, policy, SEED, PERIODS)
 
-    title = (f"{name} — {args.grid_size}x{args.grid_size}, "
-             f"{args.vehicles} vehicles, seed {args.seed}")
-    meta = {"grid_size": args.grid_size, "max_orders": args.max_orders}
+    title = (f"{name} — {mdp.grid_size}x{mdp.grid_size}, "
+             f"{mdp.n_vehicles} vehicles, seed {SEED}")
+    meta = {"grid_size": mdp.grid_size, "max_orders": mdp.max_orders}
     html = (TEMPLATE.replace("__TITLE__", title)
             .replace("__META__", json.dumps(meta))
             .replace("__FRAMES__", json.dumps(frames)))
-    with open(args.out, "w") as f:
+    with open(OUT, "w") as f:
         f.write(html)
-    avg = frames[-1]["cum_cost"] / args.periods
-    print(f"wrote {args.out}: {args.periods} periods, "
-          f"avg cost/period {avg:.2f} — open it in a browser")
+    avg = frames[-1]["cum_cost"] / PERIODS
+    print(f"wrote {OUT}: {PERIODS} periods, avg cost/period {avg:.2f} — open it in a browser")
 
 
 if __name__ == "__main__":

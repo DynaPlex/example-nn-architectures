@@ -17,4 +17,4 @@ python3.13 -m venv .venv
 .venv/bin/pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
 mkdir -p results
 echo "ready — submit from the repo root, e.g.:"
-echo "    sbatch snellius/train.job dcl --n 2000 --m 500 --h 100"
+echo "    sbatch snellius/train.job train_dcl.py"

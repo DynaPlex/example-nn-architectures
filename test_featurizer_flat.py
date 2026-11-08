@@ -5,7 +5,7 @@ import numpy as np
 from dynaplex.dcl import collect_samples
 from dynaplex.modelling import GlobalStateWriter, StateCategory
 
-from featurizers import VehicleFeaturizer
+from featurizer_flat import VehicleFeaturizer
 from mdp import MyopicPolicy, State, Vehicle, VehicleRoutingMDP
 
 
