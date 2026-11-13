@@ -1,6 +1,7 @@
 """Featurizer tests: width, count-map semantics, and engine collection."""
 from __future__ import annotations
 
+import dynaplex
 import numpy as np
 from dynaplex.dcl import collect_samples
 from dynaplex.modelling import GlobalStateWriter, StateCategory
@@ -66,18 +67,19 @@ def test_permutation_invariance():
     assert (f0 == f1).all()
 
 
-def test_engine_collection_reproducible():
+def test_engine_collection_reproducible(tmp_path):
     # Byte-exact reproducibility at a fixed configuration. (Worker-count
     # invariance is NOT asserted: on this MDP the number of decisions per
     # period varies — full vehicles are skipped — which trips a known
     # worker-split sensitivity in DCL collection.)
     mdp = VehicleRoutingMDP()
-    a = collect_samples(mdp, MyopicPolicy(mdp), features=VehicleFeaturizer,
+    a = collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "a"),
                         n=8, m=4, h=10, workers=2, slots=4, seed=5)
-    b = collect_samples(mdp, MyopicPolicy(mdp), features=VehicleFeaturizer,
+    b = collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "b"),
                         n=8, m=4, h=10, workers=2, slots=4, seed=5)
-    (xa,) = a.features.values()   # one named slab: the flat feature vector
-    (xb,) = b.features.values()
+    # a collection stores states; the features are made from them
+    (xa,) = dynaplex.featurize(mdp, str(tmp_path / "a" / "states"), VehicleFeaturizer).values()
+    (xb,) = dynaplex.featurize(mdp, str(tmp_path / "b" / "states"), VehicleFeaturizer).values()
     assert xa.shape == (8, _width(mdp))
     assert a.mask.shape == (8, mdp.num_actions)
     assert xa.tobytes() == xb.tobytes()

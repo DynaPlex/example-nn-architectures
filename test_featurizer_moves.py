@@ -3,6 +3,7 @@ and the candidate-interaction switch."""
 import numpy as np
 import pytest
 
+import dynaplex
 from dynaplex import collect_samples
 from dynaplex.modelling import assert_featurizer_for_mdp
 
@@ -25,18 +26,18 @@ def test_spec():
         ("vehicles", (3, 4)), ("depot", (1, 2))]
 
 
-def test_candidates_are_exactly_the_valid_cells():
+def test_candidates_are_exactly_the_valid_cells(tmp_path):
     mdp = _mdp()
     g = mdp.grid_size
-    flat_run = collect_samples(mdp, MyopicPolicy(mdp), features=VehicleFeaturizer, **_KW)
-    run = collect_samples(mdp, MyopicPolicy(mdp), features=MoveTokenFeaturizer, **_KW)
-    assert run.y.tobytes() == flat_run.y.tobytes()
-    assert run.mask.tobytes() == flat_run.mask.tobytes()
-    cand = run.features["candidates"]
+    # one collection; both featurizers are applied to the states it stored
+    run = collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "records"), **_KW)
+    states = str(tmp_path / "records" / "states")
+    moves = dynaplex.featurize(mdp, states, MoveTokenFeaturizer)
+    (xflat,) = dynaplex.featurize(mdp, states, VehicleFeaturizer).values()
+    cand = moves["candidates"]
     rows = np.round(cand[:, :, 0] * (g - 1)).astype(int)
     cols = np.round(cand[:, :, 1] * (g - 1)).astype(int)
     in_grid = cand[:, :, 3] > 0.5
-    (xflat,) = flat_run.features.values()
     order_grid = xflat[:, g * g:2 * g * g]
     for i in range(len(run)):
         # the in-grid candidates are exactly the mask's valid cells
@@ -51,7 +52,7 @@ def test_candidates_are_exactly_the_valid_cells():
             else:
                 assert (rows[i, k], cols[i, k]) == (r0, c0)
     # exactly one focal vehicle, standing on candidate 0
-    veh = run.features["vehicles"]
+    veh = moves["vehicles"]
     assert (veh[:, :, 3].sum(axis=1) == 1.0).all()
     focal = veh[:, :, 3].argmax(axis=1)
     assert np.allclose(veh[np.arange(len(run)), focal, 0], cand[:, 0, 0])

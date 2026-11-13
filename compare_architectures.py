@@ -1,11 +1,11 @@
-"""Train every architecture with one DCL generation at the SAME budget and
-seed, then score them all in one PolicyComparer table against myopic.
+"""Train every architecture on the SAME collected states, then score them all
+in one PolicyComparer table against myopic.
 
-Same seed means the same states are visited and labelled identically for every
-arm (features never steer generation-0 collection), so the only difference
-between the rows is the featurizer/network pair. Runs are idempotent per arm:
-DCL resumes from its stored samples and agents, so re-running after adding an
-arm is free for the existing ones.
+The states are collected once, under the myopic policy, and stored. Collecting
+does not involve a featurizer, so every arm is trained on exactly those states
+and labels: the only difference between the rows is the featurizer/network
+pair. Runs are idempotent: the collection and each arm's agent are stored, so
+re-running after adding an arm costs that arm's training only.
 
     .venv/bin/python compare_architectures.py
 """
@@ -39,12 +39,13 @@ ARMS = {
 
 def main() -> None:
     mdp = VehicleRoutingMDP()
+    dcl = dynaplex.DCL(mdp, MyopicPolicy(mdp), n=N, m=M, h=H, seed=SEED)
+    dcl.collect_gen0()                  # the one collection every arm trains on
     agents = {}
     for name, (features, network, train) in ARMS.items():
         print(f"\n==== {name} ====")
-        dcl = dynaplex.DCL(mdp, MyopicPolicy(mdp), features=features, network=network,
-                           n=N, m=M, h=H, seed=SEED, train={**TRAIN, **train})
-        agents[name] = dcl.run(generations=1)[-1]
+        agents[name] = dcl.train_policy(features=features, network=network,
+                                        train={**TRAIN, **train})
     comparer = dynaplex.PolicyComparer(
         mdp, number_of_trajectories=256, warmup_time=100, horizon=500, seed=42)
     policies = {"myopic": MyopicPolicy(mdp), "random": dynaplex.RandomPolicy(mdp)}

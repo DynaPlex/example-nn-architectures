@@ -11,9 +11,12 @@ featurizer/network pair in this repository is documented in its own module:
     featurizer_moves.MoveTokenFeaturizer candidate tokens -> networks.move_token_net
     featurizer_cells.GridTokenFeaturizer     cell tokens      -> networks.attention_pointer_net
 
-Runs are idempotent: DCL stores samples and agents under dynaplex_runs/ keyed
-by the model, budget and network, so re-running with the same settings loads
-the stored result instead of recomputing it.
+Collecting and training are separate. The collection (the states and their
+labels) depends on the model and the budget only, not on the architecture, so
+it is made once and every featurizer/network pair you try is trained on the
+same stored states. Runs are idempotent: DCL keeps the collection and the
+agents under dynaplex_runs/, so re-running with the same settings loads the
+stored result instead of recomputing it.
 
     .venv/bin/python train_dcl.py
 """
@@ -31,9 +34,10 @@ NETWORK = Net("networks.gin_net", d_model=64, n_layers=6)
 N, M, H = 10000, 500, 100
 
 mdp = VehicleRoutingMDP()
-dcl = dynaplex.DCL(mdp, MyopicPolicy(mdp), features=FEATURES, network=NETWORK,
-                   n=N, m=M, h=H, seed=0, train=dict(epochs=200, patience=60, lr=1e-3))
-agent = dcl.run(generations=1)[-1]
+dcl = dynaplex.DCL(mdp, MyopicPolicy(mdp), n=N, m=M, h=H, seed=0)
+dcl.collect_gen0()                      # once; skipped when the collection is already there
+agent = dcl.train_policy(features=FEATURES, network=NETWORK,
+                         train=dict(epochs=200, patience=60, lr=1e-3))
 
 comparer = dynaplex.PolicyComparer(
     mdp, number_of_trajectories=256, warmup_time=100, horizon=500, seed=42)

@@ -24,7 +24,7 @@ attention off, which makes the relational part of that design measurable.
 
 ## Quickstart
 
-Requires **Python 3.11–3.14** (`requirements.txt` pins `dynaplex==1.14.0`).
+Requires **Python 3.11–3.14** and DynaPlex 1.15 or newer (`requirements.txt`).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
@@ -129,11 +129,12 @@ constants at the top of each script, meant to be edited.
 collect states under the myopic policy, label each with the best move found by
 rollouts, train the network to imitate the labels, and score the result
 against the myopic and random benchmarks on common random numbers (lower cost
-is better). `compare_architectures.py` does that for every architecture with
-the same seed, so all arms see the same states and byte-identical labels and
-only the featurizer/network pair differs. Artifacts land under
-`dynaplex_runs/`, and runs are idempotent: rerunning the same configuration
-loads the stored samples and agent instead of recomputing.
+is better). `compare_architectures.py` does that for every architecture on
+one collection: the states are collected and labelled once, without any
+featurizer, and every arm is trained on exactly those states, so only the
+featurizer/network pair differs. Artifacts land under `dynaplex_runs/`, and
+runs are idempotent: rerunning loads the stored collection and agents instead
+of recomputing, and adding an arm costs that arm's training only.
 
 How a collection is spread over the machine is not a knob of this repository:
 DynaPlex's `machine="auto"` recognizes a laptop or a cluster allocation and

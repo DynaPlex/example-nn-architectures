@@ -1,4 +1,4 @@
-dynaplex==1.14.0
+dynaplex>=1.15
 numpy
 pytest
 torch
