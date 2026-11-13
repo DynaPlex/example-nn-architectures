@@ -1,4 +1,4 @@
-dynaplex>=2.0
+dynaplex==2.0.0
 numpy
 pytest
 torch

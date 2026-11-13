@@ -24,7 +24,7 @@ attention off, which makes the relational part of that design measurable.
 
 ## Quickstart
 
-Requires **Python 3.11–3.14** and DynaPlex 2.0 or newer (`requirements.txt`).
+Requires **Python 3.11–3.14** (`requirements.txt` pins `dynaplex==2.0.0`).
 
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
