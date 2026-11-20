@@ -4,8 +4,7 @@ integration via PolicyComparer."""
 import numpy as np
 import pytest
 
-import dynaplex
-from dynaplex import PolicyComparer
+import dynaplex as dp
 from dynaplex.models import RandomPolicy
 from dynaplex.modelling import StateCategory, ValidityWriter
 
@@ -43,7 +42,7 @@ def test_static_validation():
 def test_dynamics_invariants_under_myopic():
     mdp = VehicleRoutingMDP()
     policy = MyopicPolicy(mdp)
-    ctx = dynaplex.modelling.new_context(mdp, 7)
+    ctx = dp.modelling.new_context(mdp, 7)
     state = mdp.get_initial_state(ctx)
     g = mdp.grid_size
     for _ in range(400):
@@ -74,7 +73,7 @@ def test_dynamics_invariants_under_myopic():
 def test_full_vehicle_walks_up_then_left_and_resets():
     mdp = VehicleRoutingMDP(grid_size=5, n_vehicles=1, capacity=4,
                             max_orders=10, order_probability=0.0)
-    ctx = dynaplex.modelling.new_context(mdp, 0)
+    ctx = dp.modelling.new_context(mdp, 0)
     vehicles = [Vehicle(row=2, col=3, capacity_left=0)]
     state = State(
         vehicles=vehicles,
@@ -99,7 +98,7 @@ def test_order_cap_binds():
     mdp = VehicleRoutingMDP(grid_size=6, n_vehicles=1, max_orders=3,
                             order_probability=1.0)
     policy = RandomPolicy(mdp)
-    ctx = dynaplex.modelling.new_context(mdp, 11)
+    ctx = dp.modelling.new_context(mdp, 11)
     state = mdp.get_initial_state(ctx)
     assert state.n_orders <= 3  # initial draw respects the cap
     hit_cap = False
@@ -127,7 +126,7 @@ def test_arrival_redraw_and_on_the_spot_serving():
         current_vehicle=0,
         category=StateCategory.AWAIT_ACTION,
     )
-    ctx = dynaplex.modelling.new_context(mdp, 5)
+    ctx = dp.modelling.new_context(mdp, 5)
     stay = 1 * 2 + 1  # the vehicle's own cell (1,1) as a cell-index action
     for expected_cap in (2, 1):
         mdp.modify_state_with_action(state, ctx, stay)
@@ -162,7 +161,7 @@ def test_validity_masks_grid_edges():
 
 def test_comparer_runs_engine_and_is_reproducible():
     mdp = VehicleRoutingMDP()
-    comparer = PolicyComparer(mdp, number_of_trajectories=32, warmup_time=32,
+    comparer = dp.PolicyComparer(mdp, number_of_trajectories=32, warmup_time=32,
                               horizon=128, seed=1, workers=2)
     a = comparer.assess(MyopicPolicy(mdp))
     b = comparer.assess(MyopicPolicy(mdp))
@@ -187,8 +186,8 @@ def test_encodings_are_bit_identical():
     mdp_c = VehicleRoutingMDP(action_encoding=ActionEncoding.CELL)
     mdp_d = VehicleRoutingMDP(action_encoding=ActionEncoding.DIRECTIONAL)
     assert mdp_c.num_actions == 100 and mdp_d.num_actions == 5
-    ctx_c = dynaplex.modelling.new_context(mdp_c, 11)
-    ctx_d = dynaplex.modelling.new_context(mdp_d, 11)
+    ctx_c = dp.modelling.new_context(mdp_c, 11)
+    ctx_d = dp.modelling.new_context(mdp_d, 11)
     s_c = mdp_c.get_initial_state(ctx_c)
     s_d = mdp_d.get_initial_state(ctx_d)
     for _ in range(200):
@@ -204,7 +203,7 @@ def test_directional_mask_maps_onto_cell_mask():
     mdp_c = VehicleRoutingMDP(action_encoding=ActionEncoding.CELL)
     mdp_d = VehicleRoutingMDP(action_encoding=ActionEncoding.DIRECTIONAL)
     g = mdp_c.grid_size
-    ctx = dynaplex.modelling.new_context(mdp_c, 5)
+    ctx = dp.modelling.new_context(mdp_c, 5)
     state = mdp_c.get_initial_state(ctx)
     policy = MyopicPolicy(mdp_c)
     checked = 0
@@ -228,8 +227,8 @@ def test_directional_encoding_compiles_in_engine():
     compiles; myopic evaluates identically under both encodings (common seeds)."""
     kw = dict(number_of_trajectories=16, warmup_time=16, horizon=64, seed=2, workers=2)
     mdp_c = VehicleRoutingMDP()
-    a_c = PolicyComparer(mdp_c, **kw).assess(MyopicPolicy(mdp_c))
+    a_c = dp.PolicyComparer(mdp_c, **kw).assess(MyopicPolicy(mdp_c))
     mdp_d = VehicleRoutingMDP(action_encoding=ActionEncoding.DIRECTIONAL)
-    a_d = PolicyComparer(mdp_d, **kw).assess(MyopicPolicy(mdp_d))
+    a_d = dp.PolicyComparer(mdp_d, **kw).assess(MyopicPolicy(mdp_d))
     assert a_d.backend == "engine"
     assert np.array_equal(a_c.returns, a_d.returns)

@@ -20,7 +20,7 @@ stored result instead of recomputing it.
 
     .venv/bin/python train_dcl.py
 """
-import dynaplex
+import dynaplex as dp
 from dynaplex.nn import Net
 
 from featurizer_graph import GridGraphFeaturizer
@@ -34,13 +34,13 @@ NETWORK = Net("networks.gin_net", d_model=64, n_layers=6)
 N, M, H = 10000, 500, 100
 
 mdp = VehicleRoutingMDP()
-dcl = dynaplex.DCL(mdp, MyopicPolicy(mdp), n=N, m=M, h=H, seed=0)
+dcl = dp.DCL(mdp, MyopicPolicy(mdp), n=N, m=M, h=H, seed=0)
 dcl.collect_gen0()                      # once; skipped when the collection is already there
 agent = dcl.train_policy(features=FEATURES, network=NETWORK,
                          train=dict(epochs=200, patience=60, lr=1e-3))
 
-comparer = dynaplex.PolicyComparer(
+comparer = dp.PolicyComparer(
     mdp, number_of_trajectories=256, warmup_time=100, horizon=500, seed=42)
 print()
-print(comparer.compare({"myopic": MyopicPolicy(mdp), "random": dynaplex.RandomPolicy(mdp),
+print(comparer.compare({"myopic": MyopicPolicy(mdp), "random": dp.RandomPolicy(mdp),
                         "trained": agent}, benchmark="myopic"))

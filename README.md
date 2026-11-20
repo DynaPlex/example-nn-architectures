@@ -182,7 +182,7 @@ hops of context around it suffice. Here the action is a one-step move: the
 five candidate nodes are neighbours, their few-hop views nearly coincide, and
 an order six cells away is invisible to all of them, so they tie exactly where
 the labels are already noisy. The switches were added one at a time, every
-variant retrained on the SAME stored sample set (`dynaplex.train_network` on
+variant retrained on the SAME stored sample set (`dp.train_network` on
 `samples_gen0`, two to five minutes each on the laptop) and scored on the same
 comparer episodes:
 

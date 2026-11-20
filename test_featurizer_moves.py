@@ -3,8 +3,7 @@ and the candidate-interaction switch."""
 import numpy as np
 import pytest
 
-import dynaplex
-from dynaplex import collect_samples
+import dynaplex as dp
 from dynaplex.modelling import assert_featurizer_for_mdp
 
 from featurizer_flat import VehicleFeaturizer
@@ -30,10 +29,10 @@ def test_candidates_are_exactly_the_valid_cells(tmp_path):
     mdp = _mdp()
     g = mdp.grid_size
     # one collection; both featurizers are applied to the states it stored
-    run = collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "records"), **_KW)
+    run = dp.collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "records"), **_KW)
     states = str(tmp_path / "records" / "states")
-    moves = dynaplex.featurize(mdp, states, MoveTokenFeaturizer)
-    (xflat,) = dynaplex.featurize(mdp, states, VehicleFeaturizer).values()
+    moves = dp.featurize(mdp, states, MoveTokenFeaturizer)
+    (xflat,) = dp.featurize(mdp, states, VehicleFeaturizer).values()
     cand = moves["candidates"]
     rows = np.round(cand[:, :, 0] * (g - 1)).astype(int)
     cols = np.round(cand[:, :, 1] * (g - 1)).astype(int)

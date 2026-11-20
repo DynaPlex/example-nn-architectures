@@ -9,7 +9,7 @@ re-running after adding an arm costs that arm's training only.
 
     .venv/bin/python compare_architectures.py
 """
-import dynaplex
+import dynaplex as dp
 from dynaplex.nn import Net
 
 from featurizer_flat import VehicleFeaturizer
@@ -39,16 +39,16 @@ ARMS = {
 
 def main() -> None:
     mdp = VehicleRoutingMDP()
-    dcl = dynaplex.DCL(mdp, MyopicPolicy(mdp), n=N, m=M, h=H, seed=SEED)
+    dcl = dp.DCL(mdp, MyopicPolicy(mdp), n=N, m=M, h=H, seed=SEED)
     dcl.collect_gen0()                  # the one collection every arm trains on
     agents = {}
     for name, (features, network, train) in ARMS.items():
         print(f"\n==== {name} ====")
         agents[name] = dcl.train_policy(features=features, network=network,
                                         train={**TRAIN, **train})
-    comparer = dynaplex.PolicyComparer(
+    comparer = dp.PolicyComparer(
         mdp, number_of_trajectories=256, warmup_time=100, horizon=500, seed=42)
-    policies = {"myopic": MyopicPolicy(mdp), "random": dynaplex.RandomPolicy(mdp)}
+    policies = {"myopic": MyopicPolicy(mdp), "random": dp.RandomPolicy(mdp)}
     policies.update(agents)
     print()
     print(comparer.compare(policies, benchmark="myopic"))

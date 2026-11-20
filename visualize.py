@@ -10,7 +10,7 @@ page, rendered as SVG with plain JavaScript (play/pause, step, speed, scrubber).
 """
 import json
 
-import dynaplex
+import dynaplex as dp
 from dynaplex.models import RandomPolicy
 from dynaplex.modelling import StateCategory
 
@@ -40,7 +40,7 @@ class AgentPolicy:
 
 def simulate(mdp, policy, seed, periods):
     """Returns a list of per-period snapshots; index 0 is the initial state."""
-    ctx = dynaplex.modelling.new_context(mdp, seed)
+    ctx = dp.modelling.new_context(mdp, seed)
     state = mdp.get_initial_state(ctx)
 
     def snapshot():

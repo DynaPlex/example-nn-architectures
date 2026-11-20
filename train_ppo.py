@@ -10,18 +10,18 @@ the route that produces strong policies.
 
     .venv/bin/python train_ppo.py
 """
-import dynaplex
+import dynaplex as dp
 
 from featurizer_flat import VehicleFeaturizer
 from mdp import MyopicPolicy, VehicleRoutingMDP
 
 mdp = VehicleRoutingMDP()
-config = dynaplex.PPOConfig(minibatch_size=4096, total_timesteps=500_000, seed=0)
-ppo = dynaplex.PPO(mdp, features=VehicleFeaturizer, config=config)
+config = dp.PPOConfig(minibatch_size=4096, total_timesteps=500_000, seed=0)
+ppo = dp.PPO(mdp, features=VehicleFeaturizer, config=config)
 agent = ppo.train()
 
-comparer = dynaplex.PolicyComparer(
+comparer = dp.PolicyComparer(
     mdp, number_of_trajectories=256, warmup_time=100, horizon=500, seed=42)
 print()
-print(comparer.compare({"myopic": MyopicPolicy(mdp), "random": dynaplex.RandomPolicy(mdp),
+print(comparer.compare({"myopic": MyopicPolicy(mdp), "random": dp.RandomPolicy(mdp),
                         "trained": agent}, benchmark="myopic"))

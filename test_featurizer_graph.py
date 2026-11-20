@@ -2,8 +2,7 @@
 import numpy as np
 import pytest
 
-import dynaplex
-from dynaplex import collect_samples
+import dynaplex as dp
 from dynaplex.modelling import assert_featurizer_for_mdp
 
 from featurizer_flat import VehicleFeaturizer
@@ -27,10 +26,10 @@ def test_node_features_match_flat_run(tmp_path):
     mdp = _mdp()
     g = mdp.grid_size
     # one collection; both featurizers are applied to the states it stored
-    graph_run = collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "records"), **_KW)
+    graph_run = dp.collect_samples(mdp, MyopicPolicy(mdp), records=str(tmp_path / "records"), **_KW)
     states = str(tmp_path / "records" / "states")
-    (xflat,) = dynaplex.featurize(mdp, states, VehicleFeaturizer).values()
-    nodes = dynaplex.featurize(mdp, states, GridGraphFeaturizer)["nodes"]
+    (xflat,) = dp.featurize(mdp, states, VehicleFeaturizer).values()
+    nodes = dp.featurize(mdp, states, GridGraphFeaturizer)["nodes"]
 
     # exactly one focal node per state, and it is the one admissible "stay" cell:
     # the focal cell is always valid, and the valid set is its neighbourhood
