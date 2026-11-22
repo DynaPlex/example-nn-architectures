@@ -9,8 +9,7 @@
 # Run one of the repository's scripts on a full Genoa node. Submit FROM THE
 # REPO ROOT after snellius/setup.sh (which creates .venv and results/):
 #
-#     sbatch snellius/train.job train_dcl.py
-#     sbatch --time=08:00:00 snellius/train.job compare_architectures.py
+#     sbatch --time=08:00:00 snellius/train.job train_dcl_architectures.py
 #
 # The scripts carry their own budgets (edit the constants at their top); DCL's
 # machine plan "auto" recognizes the allocation and sizes the collection to it.

@@ -5,8 +5,8 @@ Uses the flat count-map features and DynaPlex's default MLP. This is the
 reinforcement-learning route to the same model: no rollout labels, the policy
 improves from its own experience. On this model PPO is the harder road — it
 has to discover that walking toward orders pays off before it can refine
-anything — so treat this script as the API illustration and train_dcl.py as
-the route that produces strong policies.
+anything — so treat this script as the API illustration and
+train_dcl_architectures.py as the route that produces strong policies.
 
     .venv/bin/python train_ppo.py
 """

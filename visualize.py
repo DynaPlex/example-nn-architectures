@@ -17,7 +17,7 @@ from dynaplex.modelling import StateCategory
 from mdp import MyopicPolicy, VehicleRoutingMDP
 
 # which policy to watch: "myopic", "random", or the path of a trained agent
-# directory such as "dynaplex_runs/VehicleRoutingMDP_.../exp_.../agent_gen1"
+# directory such as "dynaplex_runs/VehicleRoutingMDP_dcl_.../GridGraphFeaturizer_gin_.../agent_gen1"
 POLICY = "myopic"
 SEED = 3
 PERIODS = 200

@@ -20,7 +20,7 @@ Tensors, per sample:
     is-focal flag marking the deciding vehicle.
   * `depot` [1, 2] — the depot location.
 
-Pairs with `networks.move_token_net` and the CELL action encoding: the network
+Pairs with `networks.move_token_factory` and the CELL action encoding: the network
 scores the five candidate tokens and scatters the scores into the grid-cell
 action vector using the candidates' own coordinates.
 

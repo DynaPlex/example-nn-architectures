@@ -10,9 +10,9 @@ logits (one per grid cell, row-major) and never read the validity mask:
 masked cross-entropy in DCL training and masked argmax when acting crop the
 logits downstream, so a network must emit finite values for every action.
 
-  gin_net                one node per cell on the lattice, GIN message
+  gin_factory            one node per cell on the lattice, GIN message
                          passing, one logit per node       (featurizer_graph)
-  move_token_net         one token per candidate move plus context tokens,
+  move_token_factory     one token per candidate move plus context tokens,
                          scores scattered to the cells     (featurizer_moves)
 """
 from __future__ import annotations
@@ -82,7 +82,7 @@ class _GINNet(nn.Module):
         super().__init__()
         n_nodes, d_in = spec["nodes"].sample_shape
         assert num_actions == n_nodes, (
-            f"gin_net pairs nodes 1:1 with CELL actions: num_actions={num_actions} "
+            f"gin_factory pairs nodes 1:1 with CELL actions: num_actions={num_actions} "
             f"but the featurizer declares {n_nodes} nodes")
         g = math.isqrt(n_nodes)
         assert g * g == n_nodes, "the node set must be a square grid"
@@ -117,9 +117,9 @@ class _GINNet(nn.Module):
         return self.head(torch.cat([x, graph, origin], dim=-1)).squeeze(-1)  # [B, N]
 
 
-def gin_net(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 6,
-            hidden_head: int = 64) -> nn.Module:
-    """Factory entry point: `Net("networks.gin_net", ...)`. Consumes
+def gin_factory(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 6,
+                hidden_head: int = 64) -> nn.Module:
+    """Factory entry point: `Net("networks.gin_factory", ...)`. Consumes
     GridGraphFeaturizer's `nodes` on a CELL-encoded mdp. Six layers are needed
     on the 10x10 grid (three leave the policy at myopic level); train with
     lr=1e-3, ten times DynaPlex's default."""
@@ -153,7 +153,7 @@ class _MoveTokenNet(nn.Module):
         super().__init__()
         self.g = math.isqrt(num_actions)
         assert self.g * self.g == num_actions, \
-            "move_token_net emits CELL action logits: num_actions must be a square"
+            "move_token_factory emits CELL action logits: num_actions must be a square"
         self.n_cand = spec["candidates"].sample_shape[0]
         self.max_n = spec["orders"].sample_shape[0]
         self.interact = interact
@@ -202,10 +202,10 @@ class _MoveTokenNet(nn.Module):
         return out
 
 
-def move_token_net(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 2,
-                  n_heads: int = 4, ff: int = 128, hidden_head: int = 64,
-                  interact: bool = True) -> nn.Module:
-    """Factory entry point: `Net("networks.move_token_net", ...)`. Consumes
+def move_token_factory(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 2,
+                       n_heads: int = 4, ff: int = 128, hidden_head: int = 64,
+                       interact: bool = True) -> nn.Module:
+    """Factory entry point: `Net("networks.move_token_factory", ...)`. Consumes
     MoveTokenFeaturizer's bundle on a CELL-encoded mdp; `interact` is the
     candidate-to-candidate attention switch (see _MoveTokenNet)."""
     return _MoveTokenNet(spec, num_actions, d_model, n_layers, n_heads, ff,

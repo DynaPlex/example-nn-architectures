@@ -6,7 +6,7 @@ in Collaborative Order Picking", ACML (`begnardi24a.pdf`), Table 1: the grid
 cells are the nodes of a graph whose edges join adjacent cells, and everything
 the policy knows about vehicles and orders is written as NODE FEATURES. The
 edges are the same for every state (the lattice is a property of the grid, not
-of the state), so they are not features at all: `networks.gin_net` builds the
+of the state), so they are not features at all: `networks.gin_factory` builds the
 adjacency matrix once from the node count.
 
 Node features, per cell, in this order:
