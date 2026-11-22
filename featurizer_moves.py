@@ -10,12 +10,14 @@ model with a small set of candidate moves can be featurized the same way.
 Tensors, per sample:
 
   * `candidates` [5, 4] — in the fixed order stay/up/down/left/right, each
-    token (row, col) of the target cell normalized to [0, 1], whether an order
-    waits there, and an in-grid flag. An off-grid move is still written (the
+    token (row, col) of the target cell normalized to [0, 1], the weight of the
+    order waiting there divided by the vehicle capacity (0 = none), and an
+    in-grid flag. An off-grid move is still written (the
     tensor is fixed-size) with the vehicle's own coordinates and the flag at 0;
     the network does not score it and the validity mask would reject it anyway.
-  * `orders` [max_orders, 2] + `orders_count` — the waiting orders, (row, col)
-    normalized, padded past the count (as in `featurizer_cells`).
+  * `orders` [max_orders, 3] + `orders_count` — the waiting orders, (row, col)
+    normalized and weight / vehicle capacity, padded past the count. The model
+    never holds more than `max_orders` orders, so nothing is left out.
   * `vehicles` [n_vehicles, 4] — (row, col, capacity_left) normalized plus an
     is-focal flag marking the deciding vehicle.
   * `depot` [1, 2] — the depot location.
@@ -59,10 +61,11 @@ class MoveTokenFeaturizer:
         self.candidates.begin_object()
         self.candidates.append(float(row) / gm1)
         self.candidates.append(float(col) / gm1)
-        if state.has_order[row, col]:
-            self.candidates.append(1.0)
-        else:
+        order = state.grid[row][col]
+        if order is None:
             self.candidates.append(0.0)
+        else:
+            self.candidates.append(float(order.weight) / float(self.mdp.capacity))
         if in_grid:
             self.candidates.append(1.0)
         else:
@@ -94,13 +97,12 @@ class MoveTokenFeaturizer:
         else:
             self._candidate(state, v.row, v.col, False)
 
-        # order tokens: one per waiting order, row-major scan
-        for row in range(g):
-            for col in range(g):
-                if state.has_order[row, col]:
-                    self.orders.begin_object()
-                    self.orders.append(float(row) / gm1)
-                    self.orders.append(float(col) / gm1)
+        # order tokens: one per waiting order, in the order of the state's list
+        for order in state.orders:
+            self.orders.begin_object()
+            self.orders.append(float(order.row) / gm1)
+            self.orders.append(float(order.col) / gm1)
+            self.orders.append(float(order.weight) / cap)
 
         # vehicle tokens: position + remaining capacity + is-focal flag
         for i in range(n):
@@ -125,7 +127,7 @@ class MoveTokenFeaturizer:
     def spec(self) -> dict:
         return {
             "candidates": TensorSpec(Dtype.float32, (N_CANDIDATES, 4)),
-            "orders": TensorSpec(Dtype.float32, (self.mdp.max_orders, 2)),
+            "orders": TensorSpec(Dtype.float32, (self.mdp.max_orders, 3)),
             "orders_count": TensorSpec(Dtype.int64, ()),
             "vehicles": TensorSpec(Dtype.float32, (self.mdp.n_vehicles, 4)),
             "depot": TensorSpec(Dtype.float32, (1, 2)),

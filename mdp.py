@@ -6,9 +6,14 @@ stochastic customer requests", Computers & Industrial Engineering 200, 110747
 (`akkermans_model.pdf` in this repository; Section 3, Fig. 2a), with two
 deliberate departures:
 
-  * at most `max_orders` orders wait in the system: while the cap is reached no
-    new order arrives (and an arrival drawn on a cell that already holds an
-    order is redrawn, rather than dropped);
+  * a cell can hold MORE THAN ONE unit of demand. An ORDER is a cell with demand
+    waiting on it, and its WEIGHT is the number of units. At most `max_orders`
+    cells hold an order at the same time; demand itself is never refused. While
+    fewer than `max_orders` cells are occupied, a unit arrives on a cell drawn
+    uniformly from the whole grid (it starts an order there, or adds to the one
+    that is there). At the cap it is added to one of the existing orders, drawn
+    uniformly. So `max_orders` bounds what a policy has to look at, not the
+    demand;
   * a vehicle whose capacity is exhausted takes no decisions: it is skipped in
     the decision cycle and walks a fixed shortest path to the depot at (0, 0) —
     first up, then left — where its capacity resets.
@@ -18,11 +23,12 @@ Dynamics per period:
      LOCATION (vehicles may share a cell) and MOVES IMMEDIATELY — later
      deciders in the same period observe the updated positions.
   2. Event: full vehicles take their automatic return step;
-     a vehicle standing on a waiting order with capacity left picks it up
-     (lowest index first); vehicles at the depot reset to full capacity; with
-     probability `order_probability` one order arrives on a cell that holds no
-     order — arriving under a vehicle with capacity means it is served on the
-     spot. Every order still waiting then costs `holding_cost` this period.
+     a vehicle standing on an order with capacity left takes as much of its
+     weight as it can carry (lowest index first); vehicles at the depot reset
+     to full capacity; with probability `order_probability` one unit of demand
+     arrives (see above) — arriving under a vehicle with capacity means it is
+     served on the spot. Every unit still waiting then costs `holding_cost`
+     this period.
 
 Infinite horizon; the natural objective is average cost per period.
 
@@ -86,16 +92,29 @@ class Vehicle:
 
 
 @dataclass(slots=True)
+class Order:
+    """The demand waiting on one cell: `weight` units at (row, col). `slot` is
+    the order's index in `State.orders`, so it can be removed without a search."""
+    row: int
+    col: int
+    weight: int
+    slot: int
+
+
+@dataclass(slots=True)
 class State:
-    """has_order[r, c] is the paper's D_i; n_orders mirrors has_order.sum() so
-    the cap check and the cost are O(1). vehicle_count[r, c] mirrors the fleet
-    positions (every move is a -1/+1 pair) — the permutation-invariant feature
-    map. current_vehicle is the decision cursor; only vehicles with
+    """The waiting demand is held twice, and both views name the SAME Order
+    objects: `orders` lists them (at most `max_orders`), `grid[r][c]` is the
+    order on that cell or None. `total_weight` is the sum of their weights, so
+    the cost is O(1). vehicle_count[r, c] mirrors the fleet positions (every
+    move is a -1/+1 pair) — the permutation-invariant feature map.
+    current_vehicle is the decision cursor; only vehicles with
     capacity_left > 0 appear in the decision cycle."""
     vehicles: list[Vehicle]
-    has_order: Array2D[np.bool_]
+    orders: list[Order]
+    grid: list[list[Order | None]]
+    total_weight: int
     vehicle_count: Array2D[np.int64]
-    n_orders: int
     current_vehicle: int
     category: StateCategory
 
@@ -122,12 +141,10 @@ class VehicleRoutingMDP:
     horizon_type: HorizonType
 
     def __init__(self, grid_size: int = 10, n_vehicles: int = 5, capacity: int = 5,
-                 max_orders: int = 100, order_probability: float = 0.5,
+                 max_orders: int = 20, order_probability: float = 0.5,
                  holding_cost: float = 1.0,
                  action_encoding: ActionEncoding = ActionEncoding.CELL):
-        # The one static validation: arrivals are gated on n_orders < max_orders,
-        # so a free cell always exists and the arrival redraw terminates.
-        assert max_orders <= grid_size * grid_size
+        assert 1 <= max_orders <= grid_size * grid_size
         self.grid_size = grid_size
         self.n_vehicles = n_vehicles
         self.capacity = capacity
@@ -155,6 +172,42 @@ class VehicleRoutingMDP:
         state.current_vehicle = 0
         state.category = StateCategory.AWAIT_EVENT
 
+    def _arrival_cell(self, state: State, u: float) -> int:
+        """The cell (row * grid_size + col) a unit of demand arrives on, from one
+        uniform draw `u` in [0, 1): below the cap any cell of the grid, at the
+        cap the cell of one of the existing orders. One draw in both cases, so
+        two rollouts that differ in whether the cap is reached keep using the
+        same random numbers afterwards."""
+        g = self.grid_size
+        if len(state.orders) < self.max_orders:
+            cell = int(u * float(g * g))
+            if cell >= g * g:
+                cell = g * g - 1
+            return cell
+        k = int(u * float(len(state.orders)))
+        if k >= len(state.orders):
+            k = len(state.orders) - 1
+        order = state.orders[k]
+        return order.row * g + order.col
+
+    def _add_unit(self, state: State, row: int, col: int) -> None:
+        order = state.grid[row][col]
+        if order is None:
+            new_order = Order(row=row, col=col, weight=1, slot=len(state.orders))
+            state.orders.append(new_order)
+            state.grid[row][col] = new_order
+        else:
+            order.weight += 1
+        state.total_weight += 1
+
+    def _remove_order(self, state: State, order: Order) -> None:
+        # the last order of the list takes the place of the one that leaves
+        last = state.orders[-1]
+        state.orders[order.slot] = last
+        last.slot = order.slot
+        state.orders.pop()
+        state.grid[order.row][order.col] = None
+
     # ---- MDP contract -----------------------------------------------------
 
     def get_initial_state(self, context: TrajectoryContext) -> State:
@@ -169,24 +222,27 @@ class VehicleRoutingMDP:
             vehicle_count[v.row, v.col] += 1
             vehicles.append(v)
             i += 1
+        grid: list[list[Order | None]] = []
+        for _r in range(g):
+            line: list[Order | None] = []
+            for _c in range(g):
+                line.append(None)
+            grid.append(line)
+        orders: list[Order] = []
         state = State(
             vehicles=vehicles,
-            has_order=np.zeros((g, g), dtype=np.bool_),
+            orders=orders,
+            grid=grid,
+            total_weight=0,
             vehicle_count=vehicle_count,
-            n_orders=0,
             current_vehicle=0,
             category=StateCategory.AWAIT_ACTION,
         )
-        # 30 initial orders on distinct cells (clamped by the cap for small configs)
-        n0 = 30
-        if n0 > self.max_orders:
-            n0 = self.max_orders
-        while state.n_orders < n0:
-            row = context.rng.choice(g)
-            col = context.rng.choice(g)
-            if not state.has_order[row, col]:
-                state.has_order[row, col] = True
-                state.n_orders += 1
+        # 30 initial units of demand, placed by the arrival rule: on distinct
+        # cells until the cap is reached, on the existing orders after that
+        for _k in range(30):
+            cell = self._arrival_cell(state, context.rng.random())
+            self._add_unit(state, cell // g, cell % g)
         self._advance_cursor(state, 0)
         return state
 
@@ -233,14 +289,21 @@ class VehicleRoutingMDP:
                     v.col -= 1
                 state.vehicle_count[v.row, v.col] += 1
             i += 1
-        # 2. serving: lowest index first
+        # 2. serving: lowest index first; a vehicle takes all it can carry
         i = 0
         while i < self.n_vehicles:
             v = state.vehicles[i]
-            if v.capacity_left > 0 and state.has_order[v.row, v.col]:
-                state.has_order[v.row, v.col] = False
-                state.n_orders -= 1
-                v.capacity_left -= 1
+            if v.capacity_left > 0:
+                order = state.grid[v.row][v.col]
+                if order is not None:
+                    take = order.weight
+                    if take > v.capacity_left:
+                        take = v.capacity_left
+                    order.weight -= take
+                    v.capacity_left -= take
+                    state.total_weight -= take
+                    if order.weight == 0:
+                        self._remove_order(state, order)
             i += 1
         # 3. depot reset
         i = 0
@@ -249,30 +312,30 @@ class VehicleRoutingMDP:
             if v.row == self.depot.row and v.col == self.depot.col:
                 v.capacity_left = self.capacity
             i += 1
-        # 4. arrival (suppressed at the cap; redrawn on occupied cells; served
-        #    on the spot when landing under a vehicle with capacity)
-        if state.n_orders < self.max_orders:
-            if context.rng.random() < self.order_probability:
-                g = self.grid_size
-                row = context.rng.choice(g)
-                col = context.rng.choice(g)
-                while state.has_order[row, col]:
-                    row = context.rng.choice(g)
-                    col = context.rng.choice(g)
-                server = -1
-                i = 0
-                while i < self.n_vehicles:
-                    v = state.vehicles[i]
-                    if server < 0 and v.row == row and v.col == col and v.capacity_left > 0:
-                        server = i
-                    i += 1
-                if server >= 0:
-                    state.vehicles[server].capacity_left -= 1
-                else:
-                    state.has_order[row, col] = True
-                    state.n_orders += 1
+        # 4. arrival of one unit of demand (served on the spot when it lands
+        #    under a vehicle with capacity). Both numbers are drawn in every
+        #    period, whether or not a unit arrives and wherever it lands, so
+        #    every period uses the same amount of randomness.
+        u_arrival = context.rng.random()
+        u_place = context.rng.random()
+        if u_arrival < self.order_probability:
+            g = self.grid_size
+            cell = self._arrival_cell(state, u_place)
+            row = cell // g
+            col = cell % g
+            server = -1
+            i = 0
+            while i < self.n_vehicles:
+                v = state.vehicles[i]
+                if server < 0 and v.row == row and v.col == col and v.capacity_left > 0:
+                    server = i
+                i += 1
+            if server >= 0:
+                state.vehicles[server].capacity_left -= 1
+            else:
+                self._add_unit(state, row, col)
         # 5. waiting costs, clock, next decision round
-        context.cumulative_cost += self.holding_cost * state.n_orders
+        context.cumulative_cost += self.holding_cost * float(state.total_weight)
         context.time_elapsed += 1
         self._advance_cursor(state, 0)
 
@@ -312,8 +375,9 @@ class VehicleRoutingMDP:
 class MyopicPolicy:
     """The paper's myopic benchmark (Appendix C.1): move toward the closest
     waiting order — each admissible next location is valued by its distance to
-    the nearest order, and ties are broken uniformly at random. With no orders
-    in the system the vehicle stays put.
+    the nearest order. Between locations that are equally close to an order,
+    the one whose nearest order is heaviest wins; what is still tied is broken
+    uniformly at random. With no orders in the system the vehicle stays put.
 
     Encoding-agnostic: the CHOICE (a candidate move 0..4, drawn identically
     under both encodings — same policy_rng stream) is made first, and only
@@ -341,36 +405,36 @@ class MyopicPolicy:
         return cell
 
     def _nearest(self, state: State, row: int, col: int) -> int:
-        g = self.mdp.grid_size
-        best = 1000000000
-        r = 0
-        while r < g:
-            c = 0
-            while c < g:
-                if state.has_order[r, c]:
-                    dr = r - row
-                    if dr < 0:
-                        dr = -dr
-                    dc = c - col
-                    if dc < 0:
-                        dc = -dc
-                    if dr + dc < best:
-                        best = dr + dc
-                c += 1
-            r += 1
-        return best
+        """The value of standing on (row, col), lower is better: the distance to
+        the nearest order, and between equal distances the heavier order. One
+        number: distance * 1000000 - weight of the heaviest order that near."""
+        best = 1000000
+        heaviest = 0
+        for order in state.orders:
+            dr = order.row - row
+            if dr < 0:
+                dr = -dr
+            dc = order.col - col
+            if dc < 0:
+                dc = -dc
+            if dr + dc < best:
+                best = dr + dc
+                heaviest = order.weight
+            elif dr + dc == best and order.weight > heaviest:
+                heaviest = order.weight
+        return best * 1000000 - heaviest
 
     def get_action(self, state: State, context: TrajectoryContext) -> int:
         g = self.mdp.grid_size
         v = state.vehicles[state.current_vehicle]
-        if state.n_orders == 0:
+        if len(state.orders) == 0:
             return self._encode(state, 0)
         # candidate next locations in fixed order: stay, up, down, left, right
         d0 = self._nearest(state, v.row, v.col)
-        d1 = 1000000000
-        d2 = 1000000000
-        d3 = 1000000000
-        d4 = 1000000000
+        d1 = 2000000000000
+        d2 = 2000000000000
+        d3 = 2000000000000
+        d4 = 2000000000000
         if v.row > 0:
             d1 = self._nearest(state, v.row - 1, v.col)
         if v.row < g - 1:
