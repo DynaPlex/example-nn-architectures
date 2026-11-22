@@ -25,7 +25,9 @@ mdp = VehicleRoutingMDP()
 myopic = MyopicPolicy(mdp)
 
 # Collect once: 10 000 labelled states, 500 rollouts of 100 periods per move.
-dcl = dp.DCL(mdp, myopic, n=10000, m=500, h=100, seed=0)
+# torch_threads=1: these networks are small, and on a laptop CPU one thread trains
+# them faster than ten (the threads cost more to coordinate than they save).
+dcl = dp.DCL(mdp, myopic, n=10000, m=500, h=100, seed=0, torch_threads=1)
 dcl.collect_gen0()
 
 # Train each architecture on that collection. No network = DynaPlex's default MLP.
