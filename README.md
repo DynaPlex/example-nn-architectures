@@ -4,46 +4,79 @@ A [DynaPlex](https://dynaplex.github.io/DynaPlex/) example about **neural
 network architectures for sequential decision problems**: one stochastic
 vehicle-routing model on a grid, one training recipe, and three ways to present
 the state to a network — a flat feature vector, a graph, a set of tokens for
-the candidate moves. 
+the candidate moves.
+
+## The model
+
+A fleet of vehicles drives on a 10×10 grid. Demand arrives on random cells,
+and every unit of demand costs money for every period it waits. Each period,
+every vehicle decides where to go next: it stays where it is or moves to a
+neighbouring cell. A vehicle picks up the demand on the cell it stands on, as
+much as it can carry, and when it is full it drives back to the depot in the
+corner to unload. The goal is a policy that keeps the waiting demand low.
+
+The best way to get a feeling for the model is to watch it:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python visualize.py
+open episode.html
+```
+
+Run these from the root of the repository, with Python 3.11 to 3.14. The first
+line creates an empty virtual environment in the folder `.venv`, and the
+second installs DynaPlex and the other packages of `requirements.txt` into it.
+`visualize.py` writes `episode.html`, and the last line opens it in the
+browser on macOS; on Windows use `start episode.html`, on Linux
+`xdg-open episode.html`. The page is a player with play/pause, step and a
+scrubber. Vehicles are triangles labeled `index:capacity` (orange = full,
+driving back to the depot), and orders are red dots with their weight written
+in them when it is more than one. What you see is the myopic policy, in which
+every vehicle steps toward the nearest order. The constants at the top of
+`visualize.py` pick the policy (`"myopic"`, `"random"`, or the directory of a
+trained agent), the seed and the number of periods.
+
+## The action representation
+
+When developing DRL, it is important to think about how actions are
+represented in your model. For example, in this model a vehicle decides where
+to go next, and there are two logical ways to represent that decision
+(`ActionEncoding` in `mdp.py`). The dynamics are identical under both.
+
+In the **cell** representation an action is a grid cell: the vehicle's next
+location. On the 10×10 grid there are 100 actions, of which at most five are
+valid for a given vehicle: its own cell and the neighbours.
+
+In the **directional** representation an action is a move: stay, up, down,
+left or right. There are five actions, and a move that would leave the grid is
+not valid.
+
+## The neural network architectures
 
 An MDP State contains all information to represent future transitions, and this is reflected in the model state. When doing DRL, we need something that maps the state to a potential input for a neural network. This repo shows that a single model can be input to various neural networks, depending on how the state is represented. In particular, the mapping from a state to neural network requires a featurizer, and this repo has three featurizers. It also shows how to train neural networks of three flavors:
 
-| architecture | the network sees | featurizer | network |
-|---|---|---|---|
-| flat MLP | two G×G count maps and the capacities, as one vector | `featurizer_flat.py` | DynaPlex's default MLP |
-| GIN | one node per cell on the grid graph, message passing along the lattice | `featurizer_graph.py` | `networks.gin_factory` |
-| move tokens | one token per admissible move, attending to order, vehicle and depot tokens | `featurizer_moves.py` | `networks.move_token_factory` |
+| architecture | the network sees | the network scores | featurizer | network |
+|---|---|---|---|---|
+| flat MLP | two G×G count maps and the capacities, as one vector | 5 directions | `featurizer_flat.py` | DynaPlex's default MLP |
+| GIN | one node per cell on the grid graph, message passing along the lattice | 100 grid cells | `featurizer_graph.py` | `networks.gin_factory` |
+| move tokens | one token per move, attending to order, vehicle and depot tokens | 5 directions | `featurizer_moves.py` | `networks.move_token_factory` |
 
-<paragraph explaining the two action representations>
-
-The GIN starts from the "Node Actions" architecture of Begnardi, Baier, van
+The GIN uses the cell representation. It has one node per cell, so its task is
+to score each of the 100 cells for how attractive it is for the vehicle to go
+there. This follows the "Node Actions" architecture of Begnardi, Baier, van
 Jaarsveld & Zhang (2023), *Deep Reinforcement Learning for Two-sided Online
-Bipartite Matching in Collaborative Order Picking*, ACML, and scores a
-destination node in the same way. Here the destination is always within one
-step of the vehicle, and the network needed more layers and two extra readouts
-to tell those nearby cells apart (see Results). The
-move-token net scores each available action as a token; its `interact`
-switch turns candidate-to-candidate attention off, which makes the
-relational part of that design measurable.
+Bipartite Matching in Collaborative Order Picking*, ACML, where the network
+also scores nodes.
 
-## Quickstart
+The flat MLP and the move-token network use the directional representation,
+which is the more straightforward one: the network outputs five scores, one
+per move.
 
-Requires **Python 3.11–3.14** (`requirements.txt` pins `dynaplex==2.0.0`).
+A network never looks at which actions are valid. It scores all of them, and
+DynaPlex crops the scores to the valid actions, when training and when acting.
 
-```bash
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python visualize.py                # writes episode.html — open it in a browser
-.venv/bin/python train_dcl_architectures.py  # train every architecture, then a comparison table
-```
-
-The visualization is a self-contained HTML player (play/pause, step, scrubber):
-vehicles are triangles labeled `index:capacity` (orange = full, walking back to
-the depot), orders are red dots with their weight written in them when it is
-more than one. The constants at the top of
-`visualize.py` pick the policy — `"myopic"`, `"random"`, or the directory of a
-trained agent — the seed and the number of periods.
-
-## The model: dynamic vehicle routing on a grid
+## The model in detail
 
 The model is adapted from the "1-step decision" variant of the stylized
 dynamic vehicle routing problem with stochastic customer requests in Akkerman,
@@ -76,12 +109,6 @@ costs below cannot be compared with the paper's:
 
 The full order of events within a period is in the `mdp.py` docstring.
 
-An action is a **grid cell** (the `CELL` encoding, G² actions, validity
-masking admits at most 5). Every network in this repository therefore emits
-one logit per cell, in row-major order, and never looks at the mask: DynaPlex
-crops the logits to the valid cells when training and when acting. The model
-also carries the paper's `DIRECTIONAL` encoding (5 move actions), unused here.
-
 Benchmarks: the paper's **myopic policy** (step toward the nearest order; on
 equal distance toward the heavier one, what is still tied at random) in
 `mdp.py`, and DynaPlex's `RandomPolicy`.
@@ -110,8 +137,8 @@ network's `forward(batch)` receives a dict keyed by those field names.
   tokens.
 
 Each module's docstring explains its layout and the conventions that its
-network relies on (token order equals action order, one focal vehicle per
-state, candidates are exactly the valid cells).
+network relies on (node or token order equals action order, one focal vehicle
+per state).
 
 ## The networks
 
@@ -121,7 +148,8 @@ as `Net("networks.<factory>", **kwargs)`: an importable path plus keyword
 arguments, so a saved agent rebuilds itself on any machine that has this
 repository on its path.
 
-- **`gin_factory`** — input projection, then six residual rounds of
+- **`gin_factory`** — one logit per node, and node i is cell i, which is action
+  i in the cell representation. Input projection, then six residual rounds of
   `x_i ← x_i + MLP(x_i + Σ_{j adjacent} M(x_j))`, with `M` a per-layer MLP on
   every neighbour and the sum one matmul with the fixed lattice adjacency;
   then a shared MLP scores each node from three vectors: its own embedding,
@@ -131,10 +159,10 @@ repository on its path.
   shows what each change is worth.
 - **`move_token_factory`** — each token type embedded by its own small MLP, one
   `TransformerEncoder` over `[candidates | depot | vehicles | orders]` with the
-  padded orders masked, a shared head scoring each candidate token, and the
-  five scores scattered into the G² action vector at the candidates' own
-  coordinates. `interact=False` forbids candidate tokens from attending to one
-  another.
+  padded orders masked, and a shared head scoring each of the five move
+  tokens. Those five scores are the output: token k is move k, which is action
+  k in the directional representation. `interact=False` forbids move tokens
+  from attending to one another.
 
 ## Training
 
@@ -150,10 +178,13 @@ with the budget written in them, meant to be edited.
 this model: collect states under the myopic policy, label each with the best
 move found by rollouts, train a network to imitate the labels, and score the
 result against the myopic and random benchmarks on common random numbers
-(lower cost is better). It does that for every architecture on one
-collection: the states are collected and labelled once, without any
-featurizer, and every arm is trained on exactly those states, so only the
-featurizer/network pair differs. Artifacts land under `dynaplex_runs/`, and
+(lower cost is better). A collection belongs to one model, and the action
+representation is part of the model, so the script collects twice: once with
+cells for the GIN, once with directions for the flat MLP and the move-token
+network. Collecting does not involve a featurizer, so those two are trained on
+exactly the same labelled states. A comparer also works on one model, so there
+are two tables; both use the same seed, so they are about the same episodes
+and the myopic row is identical. Artifacts land under `dynaplex_runs/`, and
 runs are idempotent: rerunning loads the stored collection and agents instead
 of recomputing, and adding an arm costs that arm's training only. A comment in
 the script shows how to train a second generation.
@@ -170,32 +201,45 @@ sbatch --time=08:00:00 snellius/train.job train_dcl_architectures.py
 
 ### Results
 
-The budget in `train_dcl_architectures.py` is 10 000 labelled states, 500
-rollouts of 100 periods per candidate move, one generation, and 200 epochs
-with patience 60. The whole script takes about 11 minutes on an M4 Pro laptop:
+The budget in `train_dcl_architectures.py` is, for each of the two
+collections, 10 000 labelled states and 500 rollouts of 100 periods per
+candidate move; one generation, and 200 epochs with patience 60. The whole
+script takes about 12 minutes on an M4 Pro laptop:
 
 | step | time |
 |---|---:|
-| collect and label the states (once) | 1 min 7 s |
-| train the flat MLP | 4 s |
-| train the GIN | 4 min 21 s |
-| train the move-token network | 4 min 31 s |
-| compare the five policies | 1 min 14 s |
+| collect and label the states, cell representation | 1 min 6 s |
+| train the GIN | 4 min 22 s |
+| collect and label the states, directional representation | 1 min 5 s |
+| train the flat MLP | 3 s |
+| train the move-token network | 4 min 28 s |
+| the two comparisons | 1 min 13 s |
 
 Average cost per period over the comparer's 256 episodes, paired on common
-random numbers (DynaPlex 2.0.0, 2026-11-23):
+random numbers (DynaPlex 2.0.0, 2026-11-23). The script prints one table per
+action representation; they are about the same episodes, and the myopic row
+is identical in both.
 
-| policy            | mean cost | delta vs myopic | error of delta | notes                    |
-|-------------------|----------:|----------------:|---------------:|--------------------------|
-| myopic (benchmark)|     3.031 |               0 |                |                          |
-| random            |     99.89 |          +96.86 |           0.84 |                          |
-| flat_mlp          |    183.35 |         +180.32 |           1.05 | stops at epoch 90        |
-| gin               |     2.250 |           -0.78 |           0.02 | stops at epoch 175       |
-| moves             |     2.279 |           -0.75 |           0.02 | stops at epoch 195       |
+Cell representation:
 
-The GIN and the move-token network both beat the myopic policy by a quarter of
-its cost, and they are tied with each other. The flat MLP does not learn a
-usable policy from this budget: it is worse than random.
+| policy            | mean cost | delta vs myopic | error of delta | notes              |
+|-------------------|----------:|----------------:|---------------:|--------------------|
+| myopic (benchmark)|     3.031 |               0 |                |                    |
+| random            |     99.89 |          +96.86 |           0.84 |                    |
+| gin               |     2.250 |           -0.78 |           0.02 | stops at epoch 175 |
+
+Directional representation:
+
+| policy            | mean cost | delta vs myopic | error of delta | notes              |
+|-------------------|----------:|----------------:|---------------:|--------------------|
+| myopic (benchmark)|     3.031 |               0 |                |                    |
+| random            |     99.88 |          +96.85 |           0.82 |                    |
+| flat_mlp          |    167.50 |         +164.47 |           1.88 | stops at epoch 85  |
+| moves             |     2.037 |           -0.99 |           0.02 | all 200 epochs     |
+
+The GIN beats the myopic policy by a quarter of its cost and the move-token
+network by a third. The flat MLP does not learn a usable policy from this
+budget: it is worse than random.
 
 The validation accuracy of both networks is about 24%, and that is expected:
 in many labelled states several moves are equally good, and the rollouts
@@ -209,8 +253,8 @@ The measurements in this subsection were made on the previous version of the
 model (one order per cell, at most 100 orders, DynaPlex 1.14.0, 2026-11-07 and
 2026-11-08). They have not been repeated on the present model. On that model
 the myopic policy cost 3.096, the GIN as it is now 2.161 and the move-token
-network 2.254; with `interact=False` (move tokens do not attend to each other)
-the move-token network ended at 2.861.
+network 2.254 (it then still answered in cells); with `interact=False` (move
+tokens do not attend to each other) the move-token network ended at 2.861.
 
 **Why the paper's GIN needed changes here.** In the paper a destination can be
 far away and is itself a node that matters, so three rounds of message passing

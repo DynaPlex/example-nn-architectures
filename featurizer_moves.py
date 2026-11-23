@@ -1,11 +1,10 @@
-"""Candidate-token featurizer: one token per admissible next location.
+"""Move-token featurizer: one token per move of the deciding vehicle.
 
-The idea: a vehicle's decision is a choice among at most five cells (stay, up,
-down, left, right), so give the network exactly those five cells as tokens and
-let it score each one against the context. Compared with one token per grid
-cell (`featurizer_cells.GridTokenFeaturizer`) this is twenty times fewer
-tokens on the default grid, and nothing about it needs a grid: any routing
-model with a small set of candidate moves can be featurized the same way.
+The idea: a vehicle's decision is a choice among five moves (stay, up, down,
+left, right), so give the network exactly those five moves as tokens and let
+it score each one against the context. Nothing about it needs a grid: any
+routing model with a small set of candidate moves can be featurized the same
+way.
 
 Tensors, per sample:
 
@@ -22,9 +21,9 @@ Tensors, per sample:
     is-focal flag marking the deciding vehicle.
   * `depot` [1, 2] — the depot location.
 
-Pairs with `networks.move_token_factory` and the CELL action encoding: the network
-scores the five candidate tokens and scatters the scores into the grid-cell
-action vector using the candidates' own coordinates.
+Pairs with `networks.move_token_factory` and the DIRECTIONAL action encoding:
+token k is move k, which is action k, so the network's five scores are the
+action logits.
 
 `write_features` compiles into the engine (DynaML subset).
 """

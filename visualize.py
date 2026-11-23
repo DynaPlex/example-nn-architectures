@@ -14,7 +14,7 @@ import dynaplex as dp
 from dynaplex.models import RandomPolicy
 from dynaplex.modelling import StateCategory
 
-from mdp import MyopicPolicy, VehicleRoutingMDP
+from mdp import ActionEncoding, MyopicPolicy, VehicleRoutingMDP
 
 # which policy to watch: "myopic", "random", or the path of a trained agent
 # directory such as "dynaplex_runs/VehicleRoutingMDP_dcl_.../GridGraphFeaturizer_gin_.../agent_gen1"
@@ -187,6 +187,11 @@ def main():
         policy, name = RandomPolicy(mdp), "random policy"
     else:
         from dynaplex.nn import NNAgent
+        # an agent answers in the action representation it was trained with:
+        # 5 actions = directions, otherwise grid cells
+        with open(POLICY + "/agent.json") as f:
+            if json.load(f)["num_actions"] == 5:
+                mdp = VehicleRoutingMDP(action_encoding=ActionEncoding.DIRECTIONAL)
         policy, name = AgentPolicy(mdp, NNAgent.load(POLICY)), f"agent [{POLICY}]"
     frames = simulate(mdp, policy, SEED, PERIODS)
 
