@@ -6,7 +6,7 @@ Edit the constants below (which policy, seed, periods, output file), then
 
 and open the HTML file in a browser. No dependencies beyond the model itself
 (torch only for a trained agent): the trajectory is embedded as JSON in the
-page, rendered as SVG with plain JavaScript (play/pause, step, speed, scrubber).
+page, rendered as SVG with plain JavaScript (play/pause, step, speed, slider).
 """
 import json
 
@@ -14,7 +14,7 @@ import dynaplex as dp
 from dynaplex.models import RandomPolicy
 from dynaplex.modelling import StateCategory
 
-from mdp import MyopicPolicy, VehicleRoutingMDP
+from mdp import ActionEncoding, MyopicPolicy, VehicleRoutingMDP
 
 # which policy to watch: "myopic", "random", or the path of a trained agent
 # directory such as "dynaplex_runs/VehicleRoutingMDP_dcl_.../GridGraphFeaturizer_gin_.../agent_gen1"
@@ -46,8 +46,7 @@ def simulate(mdp, policy, seed, periods):
     def snapshot():
         return {
             "vehicles": [[v.row, v.col, v.capacity_left] for v in state.vehicles],
-            "orders": [[r, c] for r in range(mdp.grid_size)
-                       for c in range(mdp.grid_size) if state.has_order[r, c]],
+            "orders": [[o.row, o.col, o.weight] for o in state.orders],
             "cum_cost": ctx.cumulative_cost,
         }
 
@@ -125,8 +124,12 @@ function render() {
   svg.appendChild(el("text", {x: cx(0), y: cy(0) - 18, "text-anchor": "middle",
                               "font-size": 10, fill: "#444"}, "depot"));
   const f = FRAMES[frame];
-  for (const [r, c] of f.orders)
+  for (const [r, c, w] of f.orders) {
     svg.appendChild(el("circle", {cx: cx(c), cy: cy(r), r: 7, fill: "#c62828"}));
+    if (w > 1)
+      svg.appendChild(el("text", {x: cx(c), y: cy(r) + 3, "text-anchor": "middle",
+                                  "font-size": 9, fill: "#fff"}, `${w}`));
+  }
   f.vehicles.forEach(([r, c, cap], i) => {
     const off = f.vehicles.length > 1 ? (i - (f.vehicles.length - 1) / 2) * 6 : 0;
     const x = cx(c) + off, y = cy(r) - 4;
@@ -147,6 +150,7 @@ function render() {
   const avg = frame > 0 ? (cost / frame).toFixed(2) : "-";
   document.getElementById("status").textContent =
     `t=${frame}  orders=${f.orders.length}/${META.max_orders}  ` +
+    `weight=${f.orders.reduce((s, o) => s + o[2], 0)}  ` +
     `cost this period=${dcost.toFixed(0)}  cumulative=${cost.toFixed(0)}  ` +
     `avg/period=${avg}`;
   scrub.value = frame;
@@ -183,6 +187,11 @@ def main():
         policy, name = RandomPolicy(mdp), "random policy"
     else:
         from dynaplex.nn import NNAgent
+        # an agent answers in the action representation it was trained with:
+        # 5 actions = directions, otherwise grid cells
+        with open(POLICY + "/agent.json") as f:
+            if json.load(f)["num_actions"] == 5:
+                mdp = VehicleRoutingMDP(action_encoding=ActionEncoding.DIRECTIONAL)
         policy, name = AgentPolicy(mdp, NNAgent.load(POLICY)), f"agent [{POLICY}]"
     frames = simulate(mdp, policy, SEED, PERIODS)
 

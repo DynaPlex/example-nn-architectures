@@ -6,10 +6,3 @@ __pycache__/
 episode*.html
 dynaplex_runs*/
 results/
-# benchmark_results/ is deliberately NOT ignored: the per-arm-seed JSONs (a few
-# hundred floats each) and RESULTS.md are the evidence for the architecture
-# comparison. Keeping them tracked is what stops the numbers going back to being
-# hand-transcribed prose in the README.
-sat_spike_*.pt
-# quick-budget output is a wiring smoke test, never evidence -- regenerate in ~5 min
-benchmark_results/n1000m25h15/

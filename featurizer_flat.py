@@ -8,7 +8,8 @@ vehicles included (the deciding one too) — which makes vehicle permutations
 literally the same feature vector:
 
   * vehicle-count grid (G^2 entries)     — how many vehicles at each cell,
-  * waiting-order grid (G^2 entries)     — the paper's psi2,
+  * waiting-order grid (G^2 entries)     — the paper's psi2, as the weight
+                                           waiting on each cell (0 = none),
   * remaining capacity per vehicle (V)   — round-robin: the DECIDING vehicle's
                                            capacity first, then the others in
                                            index order, wrapping.
@@ -45,13 +46,14 @@ class VehicleFeaturizer:
         for row in range(g):
             for col in range(g):
                 self.v.append(float(state.vehicle_count[row, col]))
-        # waiting-order grid (psi2)
+        # waiting-order grid (psi2): the weight waiting on each cell
         for row in range(g):
             for col in range(g):
-                if state.has_order[row, col]:
-                    self.v.append(1.0)
-                else:
+                order = state.grid[row][col]
+                if order is None:
                     self.v.append(0.0)
+                else:
+                    self.v.append(float(order.weight))
         # capacities — deciding vehicle first, then the others, wrapping
         for k in range(n):
             idx = state.current_vehicle + k

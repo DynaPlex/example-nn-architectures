@@ -5,15 +5,19 @@ agent artifact can rebuild its network on any machine.
 Every factory is `factory(spec, num_actions, **kwargs) -> nn.Module`, where
 `spec` is the featurizer's observation spec (dict of TensorSpec, per-sample
 shapes) and the module's forward takes the batch dict keyed like the spec and
-returns [B, num_actions] logits. Both networks here emit CELL action
-logits (one per grid cell, row-major) and never read the validity mask:
-masked cross-entropy in DCL training and masked argmax when acting crop the
-logits downstream, so a network must emit finite values for every action.
+returns [B, num_actions] logits. A network never reads the validity mask:
+DCL training and acting crop the logits to the valid actions downstream, so a
+network must emit finite values for every action.
+
+The two networks answer in different action representations (README, "The
+action representation"):
 
   gin_factory            one node per cell on the lattice, GIN message
-                         passing, one logit per node       (featurizer_graph)
-  move_token_factory     one token per candidate move plus context tokens,
-                         scores scattered to the cells     (featurizer_moves)
+                         passing, one logit per node = per CELL action
+                                                           (featurizer_graph)
+  move_token_factory     one token per move plus context tokens, one logit
+                         per move token = per DIRECTIONAL action
+                                                           (featurizer_moves)
 """
 from __future__ import annotations
 
@@ -70,11 +74,12 @@ class _GINNet(nn.Module):
     row-major cell order by the featurizer, so the [B, G^2] logits are the
     CELL action logits; the validity mask crops them downstream.
 
-    Why not the paper's layer as is: the paper's action is a destination, so
-    three hops of context around the scored node suffice. A one-step move
-    gives five neighbouring candidates with nearly the same few-hop view, and
-    an order six cells away is invisible to all of them — hence six layers,
-    residual connections to train them, and the two readouts (README, Results).
+    Why not the paper's layer as is: in the paper a destination can be far
+    away and is itself a node that matters, so three hops of context around
+    the scored node suffice. Here the admissible destinations are the
+    vehicle's own cell and its neighbours: they have nearly the same few-hop
+    view, and an order six cells away is invisible to all of them — hence six
+    layers, residual connections to train them, and the two readouts.
     """
 
     def __init__(self, spec, num_actions: int, d_model: int, n_layers: int,
@@ -127,34 +132,34 @@ def gin_factory(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: in
 
 
 # ============================================================================
-# Candidate-token net (pairs with featurizer_moves.MoveTokenFeaturizer)
+# Move-token net (pairs with featurizer_moves.MoveTokenFeaturizer)
 # ============================================================================
 
 
 class _MoveTokenNet(nn.Module):
-    """Score the deciding vehicle's candidate moves against the state.
+    """Score the deciding vehicle's five moves against the state.
 
-    Tokens: the 5 candidate cells first, then depot, vehicles and the (padded,
-    masked) waiting orders. One transformer encoder over all of them; a shared
-    head scores each candidate token. The 5 scores are scattered into the
-    [B, G^2] CELL action vector at the candidates' own coordinates (off-grid
-    candidates, flag 0, are skipped and their cells stay at -1e9 — the validity
-    mask rejects them anyway).
+    Tokens: the 5 move tokens first (stay, up, down, left, right), then depot,
+    vehicles and the (padded, masked) orders. One transformer encoder over all
+    of them; a shared head scores each move token. Those five scores are the
+    output: on a DIRECTIONAL mdp action k is move k, so token k answers for
+    action k. A move that would leave the grid gets a score too; the validity
+    mask rejects it downstream.
 
-    `interact=False` forbids candidate tokens from attending to each other
-    (each still attends to itself and to the context), so every candidate is
-    scored independently of which other moves are available; `interact=True`
-    (default) lets the candidates condition on one another — the relational
-    step of AGILE (Jain et al.). The difference is what the switch measures.
+    `interact=False` forbids move tokens from attending to each other (each
+    still attends to itself and to the context), so every move is scored
+    independently of which other moves are available; `interact=True`
+    (default) lets the moves condition on one another, the relational step of
+    AGILE (Jain et al.). The difference is what the switch measures.
     """
 
     def __init__(self, spec, num_actions: int, d_model: int, n_layers: int,
                  n_heads: int, ff: int, hidden_head: int, interact: bool):
         super().__init__()
-        self.g = math.isqrt(num_actions)
-        assert self.g * self.g == num_actions, \
-            "move_token_factory emits CELL action logits: num_actions must be a square"
         self.n_cand = spec["candidates"].sample_shape[0]
+        assert num_actions == self.n_cand, (
+            f"move_token_factory scores one token per move: num_actions={num_actions} "
+            f"but there are {self.n_cand} move tokens (use the DIRECTIONAL action encoding)")
         self.max_n = spec["orders"].sample_shape[0]
         self.interact = interact
         self.emb_candidates = _embed(spec["candidates"].sample_shape[1], d_model)
@@ -181,32 +186,19 @@ class _MoveTokenNet(nn.Module):
                                    >= counts[:, None])
         attn_mask = None
         if not self.interact:
-            # True = may NOT attend. Block candidate -> other candidate.
+            # True = may NOT attend. Block move token -> other move token.
             attn_mask = torch.zeros(T, T, dtype=torch.bool, device=dev)
             attn_mask[:self.n_cand, :self.n_cand] = ~torch.eye(
                 self.n_cand, dtype=torch.bool, device=dev)
         h = self.encoder(tokens, mask=attn_mask, src_key_padding_mask=pad)
-        scores = self.head(h[:, :self.n_cand]).squeeze(-1)   # [B, 5]
-        # scatter into the cell-action space by indexed assignment (never by
-        # adding large sentinels: that quantizes the logits, see _MoveTokenNet)
-        gm1 = float(self.g - 1)
-        row = (cand[:, :, 0] * gm1).round().long()
-        col = (cand[:, :, 1] * gm1).round().long()
-        cell = row * self.g + col
-        ok = cand[:, :, 3] > 0.5
-        out = torch.full((B, self.g * self.g), -1e9, dtype=scores.dtype, device=dev)
-        rows = torch.arange(B, device=dev)
-        for k in range(self.n_cand):
-            sel = ok[:, k]
-            out[rows[sel], cell[sel, k]] = scores[sel, k]
-        return out
+        return self.head(h[:, :self.n_cand]).squeeze(-1)     # [B, 5]: one score per move
 
 
 def move_token_factory(spec: dict, num_actions: int, *, d_model: int = 64, n_layers: int = 2,
                        n_heads: int = 4, ff: int = 128, hidden_head: int = 64,
                        interact: bool = True) -> nn.Module:
     """Factory entry point: `Net("networks.move_token_factory", ...)`. Consumes
-    MoveTokenFeaturizer's bundle on a CELL-encoded mdp; `interact` is the
-    candidate-to-candidate attention switch (see _MoveTokenNet)."""
+    MoveTokenFeaturizer's bundle on a DIRECTIONAL-encoded mdp; `interact` is
+    the move-to-move attention switch (see _MoveTokenNet)."""
     return _MoveTokenNet(spec, num_actions, d_model, n_layers, n_heads, ff,
                          hidden_head, interact)

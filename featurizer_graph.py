@@ -13,7 +13,7 @@ Node features, per cell, in this order:
 
   0  the deciding vehicle stands here                        (0/1)
   1  number of OTHER vehicles here / (n_vehicles - 1)        [0, 1]
-  2  an order is waiting here                                (0/1)
+  2  weight of the order waiting here / vehicle capacity     (0 = none)
   3  the depot is here                                       (0/1)
   4  Manhattan distance to the deciding vehicle / (2G - 2)   [0, 1]
 
@@ -52,6 +52,7 @@ class GridGraphFeaturizer:
         if others < 1.0:
             others = 1.0
         far = float(2 * (g - 1))
+        cap = float(self.mdp.capacity)
         for row in range(g):
             for col in range(g):
                 self.nodes.begin_object()
@@ -62,10 +63,11 @@ class GridGraphFeaturizer:
                 else:
                     self.nodes.append(0.0)
                 self.nodes.append(float(count) / others)
-                if state.has_order[row, col]:
-                    self.nodes.append(1.0)
-                else:
+                order = state.grid[row][col]
+                if order is None:
                     self.nodes.append(0.0)
+                else:
+                    self.nodes.append(float(order.weight) / cap)
                 if row == self.mdp.depot.row and col == self.mdp.depot.col:
                     self.nodes.append(1.0)
                 else:
