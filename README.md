@@ -33,14 +33,14 @@ Then simulate one episode, which writes the file `episode.html`:
 .venv/bin/python visualize.py
 ```
 
-Then open that file in the browser:
+Then open that file in the browser, for example on macOS:
 
 ```bash
 open episode.html
 ```
 
-That is the command on macOS; on Windows it is `start episode.html` and on
-Linux `xdg-open episode.html`. You can also just double-click the file.
+On Windows the command is `start episode.html` and on Linux
+`xdg-open episode.html`. You can also just double-click the file.
 
 The page is a player with play/pause, step, and a slider to jump to any
 period. Vehicles are triangles labeled `index:capacity` (orange = full,
