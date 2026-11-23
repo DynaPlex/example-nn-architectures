@@ -79,8 +79,7 @@ class _GINNet(nn.Module):
     the scored node suffice. Here the admissible destinations are the
     vehicle's own cell and its neighbours: they have nearly the same few-hop
     view, and an order six cells away is invisible to all of them — hence six
-    layers, residual connections to train them, and the two readouts (README,
-    Results).
+    layers, residual connections to train them, and the two readouts.
     """
 
     def __init__(self, spec, num_actions: int, d_model: int, n_layers: int,
