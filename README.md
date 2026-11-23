@@ -15,27 +15,40 @@ neighbouring cell. A vehicle picks up the demand on the cell it stands on, as
 much as it can carry, and when it is full it drives back to the depot in the
 corner to unload. The goal is a policy that keeps the waiting demand low.
 
-The best way to get a feeling for the model is to watch it:
+The best way to get a feeling for the model is to watch it. Run the commands
+below from the root of the repository, with Python 3.11 to 3.14.
+
+First install. The first line creates an empty virtual environment in the
+folder `.venv`, and the second installs DynaPlex and the other packages of
+`requirements.txt` into it:
 
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+```
+
+Then simulate one episode, which writes the file `episode.html`:
+
+```bash
 .venv/bin/python visualize.py
+```
+
+Then open that file in the browser:
+
+```bash
 open episode.html
 ```
 
-Run these from the root of the repository, with Python 3.11 to 3.14. The first
-line creates an empty virtual environment in the folder `.venv`, and the
-second installs DynaPlex and the other packages of `requirements.txt` into it.
-`visualize.py` writes `episode.html`, and the last line opens it in the
-browser on macOS; on Windows use `start episode.html`, on Linux
-`xdg-open episode.html`. The page is a player with play/pause, step and a
-scrubber. Vehicles are triangles labeled `index:capacity` (orange = full,
-driving back to the depot), and orders are red dots with their weight written
-in them when it is more than one. What you see is the myopic policy, in which
-every vehicle steps toward the nearest order. The constants at the top of
-`visualize.py` pick the policy (`"myopic"`, `"random"`, or the directory of a
-trained agent), the seed and the number of periods.
+That is the command on macOS; on Windows it is `start episode.html` and on
+Linux `xdg-open episode.html`. You can also just double-click the file.
+
+The page is a player with play/pause, step and a scrubber. Vehicles are
+triangles labeled `index:capacity` (orange = full, driving back to the depot),
+and orders are red dots with their weight written in them when it is more than
+one. What you see is the myopic policy, in which every vehicle steps toward
+the nearest order. The constants at the top of `visualize.py` pick the policy
+(`"myopic"`, `"random"`, or the directory of a trained agent), the seed and
+the number of periods.
 
 ## The action representation
 
@@ -237,9 +250,11 @@ Directional representation:
 | flat_mlp          |    167.50 |         +164.47 |           1.88 | stops at epoch 85  |
 | moves             |     2.037 |           -0.99 |           0.02 | all 200 epochs     |
 
-The GIN beats the myopic policy by a quarter of its cost and the move-token
-network by a third. The flat MLP does not learn a usable policy from this
-budget: it is worse than random.
+The GIN and the move-token network both beat the myopic policy clearly. The
+difference between the two is within the variation between training runs: the
+same move-token network has ended between 2.0 and 2.3 in runs that differed
+only in floating-point detail, because a different epoch was kept. The flat
+MLP does not learn a usable policy from this budget: it is worse than random.
 
 The validation accuracy of both networks is about 24%, and that is expected:
 in many labelled states several moves are equally good, and the rollouts
