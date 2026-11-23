@@ -45,6 +45,13 @@ moves = dcl.train_policy(
     network=dp.Net("networks.move_token_factory", d_model=64, n_layers=2, n_heads=4),
     train=dict(epochs=200, patience=60))
 
+# A second generation collects again, now with the trained agent in the place of
+# myopic, and trains on that. `run` takes the arguments of `train_policy` and
+# returns the agents of all generations; what is stored already is loaded:
+#     gin, gin_gen2 = dcl.run(2, features=..., network=..., train=...)
+# It costs far more than the first (every rollout step evaluates the network, and
+# each architecture needs its own collection): work for a GPU or a cluster.
+
 # Score everything on the same episodes (common random numbers); lower is better.
 comparer = dp.PolicyComparer(
     mdp, number_of_trajectories=256, warmup_time=100, horizon=500, seed=42)
