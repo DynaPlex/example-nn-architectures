@@ -180,6 +180,13 @@ repository on its path.
   k in the directional representation. `interact=False` forbids move tokens
   from attending to one another.
 
+PPO also needs a critic, a second network that estimates the cost still to
+come from a state. It only helps during training and is not part of the
+trained agent. For the flat feature vector DynaPlex builds one itself; the
+critics for the GIN and the move tokens are in
+[`critic_networks.py`](critic_networks.py). Deep Controlled Learning has no
+critic.
+
 ## Training
 
 There are two training scripts. The first trains every architecture with Deep
@@ -189,7 +196,8 @@ Controlled Learning and prints a comparison table per action representation:
 .venv/bin/python train_dcl_architectures.py
 ```
 
-The second trains the flat MLP with PPO, from scratch:
+The second trains the GIN with PPO, from scratch. The same calls for the other
+two architectures are in the script, commented out:
 
 ```bash
 .venv/bin/python train_ppo.py
@@ -228,16 +236,10 @@ sbatch --time=08:00:00 snellius/train.job train_dcl_architectures.py
 The budget in [`train_dcl_architectures.py`](train_dcl_architectures.py) is, for each of the two
 collections, 10 000 labelled states and 500 rollouts of 100 periods per
 candidate move; one generation, and 200 epochs with patience 60. The whole
-script takes about 12 minutes on an M4 Pro laptop:
-
-| step | time |
-|---|---:|
-| collect and label the states, cell representation | 1 min 6 s |
-| train the GIN | 4 min 22 s |
-| collect and label the states, directional representation | 1 min 5 s |
-| train the flat MLP | 3 s |
-| train the move-token network | 4 min 28 s |
-| the two comparisons | 1 min 13 s |
+script takes about 12 minutes on an M4 Pro laptop: about one minute for each
+of the two collections, four to five minutes each to train the GIN and the
+move-token network, and a minute for the comparisons. The flat MLP trains in
+seconds.
 
 Average cost per period over the comparer's 256 episodes, paired on common
 random numbers (DynaPlex 2.0.0, 2026-11-23). The script prints one table per
@@ -261,8 +263,15 @@ Directional representation:
 | flat_mlp          |    167.50 |         +164.47 |           1.88 |
 | moves             |     2.037 |           -0.99 |           0.02 |
 
-The GIN and the move-token network both beat the myopic policy clearly. The
-difference between the two is within the variation between training runs: the
+The GIN and the move-token network both beat the myopic policy clearly, so
+they learn something useful that the myopic rule does not have. A likely part
+of it is coordination: under the myopic policy every vehicle drives to its
+own nearest order, so several vehicles can chase the same one, while a
+network sees where the other vehicles are. We have not measured what the
+networks do differently; the way to find out is to watch a trained agent with
+[`visualize.py`](visualize.py).
+
+The difference between the two is within the variation between training runs: the
 same move-token network has ended between 2.0 and 2.3 in runs that differed
 only in floating-point detail, because a different epoch was kept. The flat
 MLP does not learn a usable policy from this budget: it is worse than random.
@@ -272,6 +281,13 @@ in many labelled states several moves are equally good, and the rollouts
 cannot separate them (31% of the labels are more than one standard error
 ahead of the second-best move). The cost in the comparer is the measure to
 look at, not the accuracy.
+
+PPO is not in these tables. [`train_ppo.py`](train_ppo.py) ran its 500 000
+steps with the GIN (about 27 minutes on the same laptop) and did not learn a
+useful policy: its cost was 205 per period, worse than random. PPO starts from
+nothing and first has to discover that driving toward orders pays off, and
+this budget is not enough for that. The script is there to show how PPO is
+called, not to produce a policy.
 
 ## Adapting the example
 
