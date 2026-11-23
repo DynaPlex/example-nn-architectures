@@ -42,13 +42,13 @@ open episode.html
 That is the command on macOS; on Windows it is `start episode.html` and on
 Linux `xdg-open episode.html`. You can also just double-click the file.
 
-The page is a player with play/pause, step and a scrubber. Vehicles are
-triangles labeled `index:capacity` (orange = full, driving back to the depot),
-and orders are red dots with their weight written in them when it is more than
-one. What you see is the myopic policy, in which every vehicle steps toward
-the nearest order. The constants at the top of `visualize.py` pick the policy
-(`"myopic"`, `"random"`, or the directory of a trained agent), the seed and
-the number of periods.
+The page is a player with play/pause, step, and a slider to jump to any
+period. Vehicles are triangles labeled `index:capacity` (orange = full,
+driving back to the depot), and orders are red dots with their weight written
+in them when it is more than one. What you see is the myopic policy, in which
+every vehicle steps toward the nearest order. The constants at the top of
+`visualize.py` pick the policy (`"myopic"`, `"random"`, or the directory of a
+trained agent), the seed and the number of periods.
 
 ## The action representation
 

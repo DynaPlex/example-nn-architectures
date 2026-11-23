@@ -6,7 +6,7 @@ Edit the constants below (which policy, seed, periods, output file), then
 
 and open the HTML file in a browser. No dependencies beyond the model itself
 (torch only for a trained agent): the trajectory is embedded as JSON in the
-page, rendered as SVG with plain JavaScript (play/pause, step, speed, scrubber).
+page, rendered as SVG with plain JavaScript (play/pause, step, speed, slider).
 """
 import json
 
